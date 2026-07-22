@@ -1,0 +1,9 @@
+{
+  "seq_length": 80,
+  "num_conds": 7,
+  "seed": 777,
+  "trained_at": "2026-07-11T18:51:22",
+  "source": "MS2_Data_PyTorch/scripts/Model_CorePromoter_clean.ipynb via recursive_corepromoter_design.py",
+  "final_train_mse_log10": 0.16721004247665405,
+  "final_test_mse_log10": 0.17133595049381256
+}
