@@ -1,0 +1,70 @@
+# Python
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter / TensorBoard
+**/.ipynb_checkpoints/
+**/runs/
+
+# Environments and secrets
+.venv/
+.env
+.env.*
+*.pem
+*.key
+
+# Personal editor / AI settings
+/.claude/
+/.codex/
+/.agents/
+/.vscode/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Model checkpoints
+*.pt
+*.pth
+!/MS2_Data_PyTorch/weights/*.pt
+
+# Sequencing data
+*.fastq
+*.fastq.gz
+
+*.png
+*.svg
+
+# Generated outputs
+/outputs/
+/results/
+/Promoter_library_design/candidates_output/
+/Promoter_library_design/variants_output/
+/Promoter_library_design/energy_logos/
+/Promoter_library_design/contamination_check/
+*.log
+
+# Backup copies and archives
+/MS2_Data_PyTorch - 複製/
+/MS2_Data_PyTorch - 複製 (2)/
+/MS2_Data_PyTorch.zip
+/MS2_Data_PyTorch/tables - 複製/
+
+# Raw and processed experimental tables
+/MS2_Data_PyTorch/tables/*
+!/MS2_Data_PyTorch/tables/elements_shared.csv
+!/MS2_Data_PyTorch/tables/phage_promoters.csv
+!/MS2_Data_PyTorch/tables/README.md
+
+# Large top-level experimental files
+/MS2_Data_PyTorch/*.csv
+/MS2_Data_PyTorch/*.tsv
+
+# Local reference documents
+*.pdf
+*.pptx
+*.docx
+/Design.xlsx
