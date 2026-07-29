@@ -37,6 +37,7 @@ Thumbs.db
 
 *.png
 *.svg
+*.gb
 
 # Generated outputs
 /outputs/
