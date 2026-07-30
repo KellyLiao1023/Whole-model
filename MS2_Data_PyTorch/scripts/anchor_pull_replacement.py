@@ -15,11 +15,13 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SCAN_CSV = ROOT / "MS2_Data_PyTorch" / "tables" / "assembled_nn_scan_clean.csv"
 DEFAULT_CANDIDATE_DIR = ROOT / "Promoter_library_design" / "candidates_output"
 DEFAULT_VARIANT_DIR = ROOT / "Promoter_library_design" / "variants_output"
-DEFAULT_OUTPUT_DIR = ROOT / "outputs" / "019ec8ae-c0ac-7190-868c-5c4ba74a5396"
+# outputs/ sits next to scripts/ and is created on demand by _write_excel.
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR.parent / "outputs"
 
 BG5 = "AGGGAAGAGACC"
 BG3 = "GTCGACTCTAGA"

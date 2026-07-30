@@ -37,9 +37,11 @@ Thumbs.db
 
 *.png
 *.svg
+*.gb
 
 # Generated outputs
 /outputs/
+/MS2_Data_PyTorch/outputs/
 /results/
 /Promoter_library_design/candidates_output/
 /Promoter_library_design/variants_output/
