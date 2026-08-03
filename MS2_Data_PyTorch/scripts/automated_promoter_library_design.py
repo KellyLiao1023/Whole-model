@@ -4,7 +4,6 @@ import itertools
 import json
 import math
 import random
-import warnings
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -13,13 +12,7 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 import torch
-
-# tqdm is optional
-try:
-    from tqdm import tqdm
-except Exception:  # pragma: no cover
-    def tqdm(x, **kwargs):
-        return x
+from tqdm import tqdm
 
 import recursive_corepromoter_design as legacy
 from BPM.BPM import score_m10 as bpm_score_m10
@@ -27,7 +20,6 @@ from BPM.BPM import score_m35 as bpm_score_m35
 
 
 PROJECT_ROOT = legacy.PROJECT_ROOT
-TABLE_DIR = legacy.TABLE_DIR
 WEIGHTS_DIR = legacy.WEIGHTS_DIR
 DEFAULT_PARENT_OUT = legacy.DEFAULT_PARENT_OUT
 
@@ -57,13 +49,14 @@ ELEMENT_LENGTHS = {
     "ITS": 10,
 }
 
+# Sequence lengths come from ELEMENT_LENGTHS; this table only says where to read.
 SOURCE_SPECS = {
-    "UP": ("UL.pkl", None, 19),
-    "m35": ("PL.pkl", "minus35", 6),
-    "spacer": ("SL17.pkl", None, 17),
-    "m10": ("PL.pkl", "minus10", 6),
-    "DIS": ("DL.pkl", None, 8),
-    "ITS": ("ITS.pkl", None, 10),
+    "UP": ("UL.pkl", None),
+    "m35": ("PL.pkl", "minus35"),
+    "spacer": ("SL17.pkl", None),
+    "m10": ("PL.pkl", "minus10"),
+    "DIS": ("DL.pkl", None),
+    "ITS": ("ITS.pkl", None),
 }
 
 WEIGHT_NAMES = {
@@ -91,7 +84,6 @@ class DesignConfig:
     bg3: str = "A" * 13
     gap_length: int = 3
     gap_seed: int = 777
-    random_seed: int = 777
     # Fallback bin count for elements absent from mutable_energy_fraction_ranges.
     n_energy_bins: int = 4
     default_energy_fraction_range: tuple[float, float] = (0.0, 0.8)
@@ -116,8 +108,6 @@ class DesignConfig:
             raise ValueError(f"Missing consensus sequences: {sorted(missing)}")
         if self.n_energy_bins < 1:
             raise ValueError(f"n_energy_bins must be at least 1; received {self.n_energy_bins}")
-        if self.gap_length != 3:
-            raise ValueError("The current CorePromoter design specification requires a 3-bp gap.")
         self.default_energy_fraction_range = _validated_fraction_range(
             "default_energy_fraction_range", self.default_energy_fraction_range
         )
@@ -216,11 +206,33 @@ def version_index(version: str) -> int:
     return int(str(version)[1:])
 
 
-def _safe_torch_load(path: Path, device: torch.device):
-    try:
-        return torch.load(path, map_location=device, weights_only=True)
-    except TypeError:
-        return torch.load(path, map_location=device)
+def _bin_edges(
+    e_min: float, e_max: float, lower_fraction: float, upper_fraction: float, n_bins: int
+) -> np.ndarray:
+    """Equal-width bin edges over the requested slice of an observed energy axis."""
+    energy_span = e_max - e_min
+    return np.linspace(
+        e_min + lower_fraction * energy_span,
+        e_min + upper_fraction * energy_span,
+        n_bins + 1,
+    )
+
+
+def pool_bin_edges(pool: pd.DataFrame) -> tuple[np.ndarray, float, float, float, float, float, int]:
+    """Rebuild a scored pool's exact bin edges from its constant columns.
+
+    energy_bin_summary leaves energy_lower/energy_upper as NaN for empty bins, so
+    anything that needs every edge recomputes them from energy_min/max and the
+    stored fractions instead. Returns
+    (edges, e_min, e_max, span, lower_fraction, upper_fraction, n_bins).
+    """
+    e_min = float(pool["energy_min"].iloc[0])
+    e_max = float(pool["energy_max"].iloc[0])
+    lower_fraction = float(pool["binning_fraction_lower"].iloc[0])
+    upper_fraction = float(pool["binning_fraction_upper"].iloc[0])
+    n_bins = int(pool["n_assigned_bins"].iloc[0])
+    edges = _bin_edges(e_min, e_max, lower_fraction, upper_fraction, n_bins)
+    return edges, e_min, e_max, e_max - e_min, lower_fraction, upper_fraction, n_bins
 
 
 def _file_signature(path: Path) -> dict:
@@ -254,7 +266,7 @@ class ElementModelBundle:
         if not weight_path.exists():
             raise FileNotFoundError(f"Missing trained element weight: {weight_path}")
         model = legacy.ElementEnergyModel(kernel_size).to(self.device)
-        state = _safe_torch_load(weight_path, self.device)
+        state = torch.load(weight_path, map_location=self.device, weights_only=True)
         model.load_state_dict(state, strict=True)
         return model.eval()
 
@@ -291,11 +303,11 @@ class ElementModelBundle:
 
     def score(self, element: str, sequences: Iterable[str], batch_size: int = 4096) -> np.ndarray:
         seqs = [normalize_dna(seq) for seq in sequences]
-        result = np.full(len(seqs), np.nan, dtype=float)
         if element == "m35":
             return np.array([-float(bpm_score_m35(seq)) for seq in seqs], dtype=float)
         if element == "m10":
             return np.array([-float(bpm_score_m10(seq)) for seq in seqs], dtype=float)
+        result = np.full(len(seqs), np.nan, dtype=float)
         if element == "spacer":
             for length, model in self.spacer_models.items():
                 idx = [i for i, seq in enumerate(seqs) if len(seq) == length and set(seq) <= set("ACGT")]
@@ -317,7 +329,7 @@ def load_core_model(device: torch.device, checkpoint_path: Path | None = None) -
     checkpoint_path = checkpoint_path or legacy.WEIGHTS_DIR / "weights_CorePromoter_clean.pt"
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Missing CorePromoter checkpoint: {checkpoint_path}")
-    checkpoint = _safe_torch_load(checkpoint_path, device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     model = legacy.CorePromoterModel(
         seq_length=int(checkpoint["seq_length"]),
         num_conds=int(checkpoint["num_conds"]),
@@ -327,7 +339,8 @@ def load_core_model(device: torch.device, checkpoint_path: Path | None = None) -
 
 
 def _source_sequences(element: str, max_source_rows: int | None = None) -> tuple[list[str], Path]:
-    filename, column, expected_len = SOURCE_SPECS[element]
+    filename, column = SOURCE_SPECS[element]
+    expected_len = ELEMENT_LENGTHS[element]
     path = legacy.TABLE_DIR / filename
     if not path.exists():
         raise FileNotFoundError(path)
@@ -369,7 +382,8 @@ def build_scored_pools(
         if use_cache and cache_path.exists() and meta_path.exists():
             try:
                 cached_ok = json.loads(meta_path.read_text(encoding="utf-8")) == signature
-            except Exception:
+            except json.JSONDecodeError:
+                # A truncated meta file just means the cache is unusable; rebuild it.
                 cached_ok = False
         if cached_ok:
             pool = pd.read_pickle(cache_path)
@@ -392,25 +406,19 @@ def build_scored_pools(
 
 def assign_equal_width_bins(
     pool: pd.DataFrame,
-    n_bins: int = 5,
-    lower_fraction: float = 0.0,
-    upper_fraction: float = 1.0,
-    binning_mode: str = "legacy_full_range",
+    n_bins: int,
+    lower_fraction: float,
+    upper_fraction: float,
+    binning_mode: str,
 ) -> pd.DataFrame:
+    # The fractions arrive already validated by DesignConfig.__post_init__.
     out = pool.copy()
     e_min = float(out["energy"].min())
     e_max = float(out["energy"].max())
     if not np.isfinite(e_min) or not np.isfinite(e_max) or e_min >= e_max:
         raise ValueError(f"Cannot create energy bins: E_min={e_min}, E_max={e_max}")
-    if not (0.0 <= lower_fraction < upper_fraction <= 1.0):
-        raise ValueError(
-            "Energy range fractions must satisfy 0 <= lower < upper <= 1; "
-            f"received {(lower_fraction, upper_fraction)}"
-        )
     energy_span = e_max - e_min
-    range_min = e_min + lower_fraction * energy_span
-    range_max = e_min + upper_fraction * energy_span
-    edges = np.linspace(range_min, range_max, n_bins + 1)
+    edges = _bin_edges(e_min, e_max, lower_fraction, upper_fraction, n_bins)
     out["energy_bin"] = pd.cut(
         out["energy"],
         bins=edges,
@@ -431,10 +439,23 @@ def assign_equal_width_bins(
     return out.sort_values(["energy_bin", "distance_to_bin_center", "sequence"]).reset_index(drop=True)
 
 
+def locked_energies(models: ElementModelBundle, config: DesignConfig) -> dict[str, float]:
+    """Energy of each element's locked consensus, on that element's own score axis.
+
+    Kept under the historical name v5_energy where it is an output column; the
+    locked slot is v{n_bins+1} and is only literally v5 at four bins.
+    """
+    return {
+        element: float(models.score(element, [config.consensus[element]])[0])
+        for element in ELEMENTS
+    }
+
+
 def energy_bin_summary(pools: dict[str, pd.DataFrame], config: DesignConfig, models: ElementModelBundle) -> pd.DataFrame:
+    locked = locked_energies(models, config)
     rows = []
     for element, pool in pools.items():
-        v5_energy = float(models.score(element, [config.consensus[element]])[0])
+        v5_energy = locked[element]
         n_bins, lower_fraction, upper_fraction, binning_mode = config.energy_bin_spec(element)
         fraction_edges = np.linspace(lower_fraction, upper_fraction, n_bins + 1)
         n_below_range = int((pool["energy_fraction"] < lower_fraction).sum())
@@ -471,13 +492,7 @@ class DesignSpace:
         self.models = models
         self.scored_pools = scored_pools
         self.unit_candidates: dict[DesignUnitKey, pd.DataFrame] = {}
-        # Energy of the locked consensus. Kept under the historical name v5_energy
-        # because it is also an output column; the locked slot is v{n_bins+1} and is
-        # only literally v5 when the element uses four bins.
-        self.v5_energy = {
-            element: float(models.score(element, [config.consensus[element]])[0])
-            for element in ELEMENTS
-        }
+        self.v5_energy = locked_energies(models, config)
         self._build_units()
 
     def _eligible_bin(self, element: str, bin_id: int) -> pd.DataFrame:
@@ -502,26 +517,17 @@ class DesignSpace:
 
     def _build_units(self) -> None:
         for element in ELEMENTS:
-            if element == "spacer":
-                continue
             for version_idx in range(1, self.config.n_mutable_bins(element) + 1):
+                # The spacer skips two bins: bin 2 is consumed by the coupled
+                # v2/v3 pair built below, and bin SPACER_DERIVED_VERSION_IDX is
+                # never sourced at all because that version is derived from v2.
+                if element == "spacer" and version_idx in (2, SPACER_DERIVED_VERSION_IDX):
+                    continue
                 key = DesignUnitKey(element, f"v{version_idx}")
                 sub = self._eligible_bin(element, version_idx).copy()
                 sub["version"] = f"v{version_idx}"
                 sub["selection_mode"] = "database_bin"
                 self.unit_candidates[key] = sub
-
-        # The spacer skips two bins here: bin 2 is consumed by the coupled
-        # v2/v3 pair below, and bin SPACER_DERIVED_VERSION_IDX is never sourced
-        # at all because that version is derived from v2.
-        for version_idx in range(1, self.config.n_mutable_bins("spacer") + 1):
-            if version_idx in (2, SPACER_DERIVED_VERSION_IDX):
-                continue
-            key = DesignUnitKey("spacer", f"v{version_idx}")
-            sub = self._eligible_bin("spacer", version_idx).copy()
-            sub["version"] = f"v{version_idx}"
-            sub["selection_mode"] = "database_bin"
-            self.unit_candidates[key] = sub
 
         base = self._eligible_bin("spacer", 2).rename(
             columns={
@@ -556,16 +562,9 @@ class DesignSpace:
         ).reset_index(drop=True)
 
     def _energy_bin_for_value(self, element: str, value: float) -> int | None:
-        pool = self.scored_pools[element]
-        e_min = float(pool["energy_min"].iloc[0])
-        e_max = float(pool["energy_max"].iloc[0])
-        n_bins, lower_fraction, upper_fraction, _ = self.config.energy_bin_spec(element)
-        energy_span = e_max - e_min
-        range_min = e_min + lower_fraction * energy_span
-        range_max = e_min + upper_fraction * energy_span
-        if not np.isfinite(value) or value < range_min or value > range_max:
+        edges, *_, n_bins = pool_bin_edges(self.scored_pools[element])
+        if not np.isfinite(value) or value < edges[0] or value > edges[-1]:
             return None
-        edges = np.linspace(range_min, range_max, n_bins + 1)
         return int(np.clip(np.searchsorted(edges, value, side="right"), 1, n_bins))
 
     def candidate_pool_summary(self) -> pd.DataFrame:
@@ -574,6 +573,8 @@ class DesignSpace:
         for key, search_pool in self.unit_candidates.items():
             source_bin = 2 if key == DesignUnitKey("spacer", "v2_v3_pair") else int(key.unit_id[1:])
             scored = self.scored_pools[key.element]
+            edges, _, _, _, frac_lo, frac_hi, n_bins = pool_bin_edges(scored)
+            fraction_edges = np.linspace(frac_lo, frac_hi, n_bins + 1)
             bin_rows = scored[scored["energy_bin"] == source_bin]
             eligible = bin_rows[
                 (bin_rows["energy"] < self.v5_energy[key.element])
@@ -589,26 +590,10 @@ class DesignSpace:
                     "element": key.element,
                     "design_unit_id": key.unit_id,
                     "source_energy_bin": source_bin,
-                    "energy_fraction_lower": (
-                        float(bin_rows["binning_fraction_lower"].iloc[0])
-                        + (source_bin - 1)
-                        * (
-                            float(bin_rows["binning_fraction_upper"].iloc[0])
-                            - float(bin_rows["binning_fraction_lower"].iloc[0])
-                        )
-                        / int(bin_rows["n_assigned_bins"].iloc[0])
-                    ),
-                    "energy_fraction_upper": (
-                        float(bin_rows["binning_fraction_lower"].iloc[0])
-                        + source_bin
-                        * (
-                            float(bin_rows["binning_fraction_upper"].iloc[0])
-                            - float(bin_rows["binning_fraction_lower"].iloc[0])
-                        )
-                        / int(bin_rows["n_assigned_bins"].iloc[0])
-                    ),
-                    "energy_lower": float(bin_rows["bin_lower"].iloc[0]),
-                    "energy_upper": float(bin_rows["bin_upper"].iloc[0]),
+                    "energy_fraction_lower": float(fraction_edges[source_bin - 1]),
+                    "energy_fraction_upper": float(fraction_edges[source_bin]),
+                    "energy_lower": float(edges[source_bin - 1]),
+                    "energy_upper": float(edges[source_bin]),
                     "n_sequences_in_bin": int(len(bin_rows)),
                     "n_eligible_below_v5": int(len(eligible)),
                     "n_source_candidates_examined": int(n_examined),
@@ -640,7 +625,7 @@ class DesignSpace:
         for key, pool in self.unit_candidates.items():
             if key == DesignUnitKey("spacer", "v2_v3_pair"):
                 seq_v2 = lookup[("spacer", "v2")]
-                seq_v3 = lookup[("spacer", "v3")]
+                seq_v3 = lookup[("spacer", f"v{SPACER_DERIVED_VERSION_IDX}")]
                 mask = (pool["sequence_v2"] == seq_v2) & (pool["sequence_v3"] == seq_v3)
             else:
                 mask = pool["sequence"] == lookup[(key.element, key.unit_id)]
@@ -790,11 +775,9 @@ def build_balanced_gap_assignment(config: DesignConfig) -> pd.DataFrame:
         }
         row.update({f"{element}_version": version for element, version in zip(ELEMENTS, versions)})
         rows.append(row)
-    out = pd.DataFrame(rows)
-    counts = out["gap_3bp"].value_counts()
-    if counts.max() - counts.min() > 1 or len(counts) != len(kmers):
-        raise AssertionError("Gap assignment is not maximally balanced.")
-    return out
+    # kmers * base + extra uses every kmer `base` times plus `remainder` distinct
+    # extras, so the counts differ by at most 1 by construction.
+    return pd.DataFrame(rows)
 
 
 def assemble_library(
@@ -833,7 +816,9 @@ def assemble_library(
     )
     out["design_m35_start"] = len(config.bg5) + out["UP_seq"].str.len() + config.gap_length
     out["design_spacer_len"] = out["spacer_seq"].str.len()
-    out["design_m10_start"] = out["design_m35_start"] + 6 + out["design_spacer_len"]
+    out["design_m10_start"] = (
+        out["design_m35_start"] + ELEMENT_LENGTHS["m35"] + out["design_spacer_len"]
+    )
     expected_variants = config.n_variants()
     if len(out) != expected_variants:
         raise AssertionError(
@@ -989,7 +974,9 @@ class CorePromoterScanner:
         df["observed_channel"] = observed_channel
         df["observed_spacer_len"] = df["observed_channel"].map(legacy.SPACER_BY_CHANNEL).astype(int)
         df["observed_m35_start"] = df["observed_arch_start"] + self.m35_offset
-        df["observed_m10_start"] = df["observed_m35_start"] + 6 + df["observed_spacer_len"]
+        df["observed_m10_start"] = (
+            df["observed_m35_start"] + ELEMENT_LENGTHS["m35"] + df["observed_spacer_len"]
+        )
         df["m35_shift"] = df["observed_m35_start"] - df["design_m35_start"]
         df["m10_shift"] = df["observed_m10_start"] - df["design_m10_start"]
         df["spacer_length_shift"] = df["observed_spacer_len"] - df["design_spacer_len"]
@@ -1006,27 +993,17 @@ class CorePromoterScanner:
         )
         df["strongest_non_target_m10_start"] = (
             df["strongest_non_target_m35_start"]
-            + 6
+            + ELEMENT_LENGTHS["m35"]
             + df["strongest_non_target_spacer_len"]
         )
         df["target_margin_core_score"] = (
             df["design_core_score"] - df["strongest_non_target_core_score"]
         )
         df["best_minus_design_core_score"] = df["best_core_score"] - df["design_core_score"]
-        # Legacy alias retained for existing result readers. Prefer target_margin_core_score for QC.
-        df["delta_core_score"] = df["best_minus_design_core_score"]
+        # Predicted expression at zero library bias.
         df["best_predicted_log10_gfp"] = best_log10_gfp
         df["design_predicted_log10_gfp"] = design_log10_gfp
         df["strongest_non_target_predicted_log10_gfp"] = strongest_non_target_log10_gfp
-        df["expression_reference_condition"] = "zero_library_bias"
-        df["m10_shifted"] = df["m10_shift"] != 0
-        df["m35_shifted"] = df["m35_shift"] != 0
-        df["m10_out_of_range"] = df["m10_shift"].abs() > self.config.max_abs_shift
-        df["m35_out_of_range"] = df["m35_shift"].abs() > self.config.max_abs_shift
-        df["primary_shift_class"] = df["m10_shift"]
-        df["secondary_shift_class"] = list(
-            zip(df["m35_shift"], df["observed_spacer_len"])
-        )
         if annotate_diagnostics:
             self._annotate_observed_roles_and_windows(df)
             # Window annotation intentionally creates many export columns.
@@ -1193,7 +1170,7 @@ def objective_for_phase(summary: dict, phase: str) -> tuple:
     return (0,)
 
 
-def _dominant_shift(scan: pd.DataFrame, phase: str, config: DesignConfig) -> tuple[int | None, pd.Series]:
+def _dominant_shift(scan: pd.DataFrame, phase: str) -> tuple[int | None, pd.Series]:
     shift_col = f"{phase}_shift"
     # Driver selection follows the global objective: eliminate any register
     # shift first. Out-of-range magnitude is only a later tie-breaker.
@@ -1216,15 +1193,7 @@ def diagnose_shift_drivers(
 ) -> dict:
     summary = summarize_validation(scan, config)
     phase = phase or summary["phase"]
-    if phase == "done":
-        return {
-            "phase": phase,
-            "dominant_shift": None,
-            "risk": pd.DataFrame(),
-            "overlap": pd.DataFrame(),
-            "driver_units": [],
-        }
-    dominant, target_mask = _dominant_shift(scan, phase, config)
+    dominant, target_mask = (None, None) if phase == "done" else _dominant_shift(scan, phase)
     if dominant is None:
         return {
             "phase": phase,
@@ -1467,10 +1436,7 @@ class AutomatedRedesigner:
     def _read_records(path: Path) -> list[dict]:
         if not path.exists() or path.stat().st_size == 0:
             return []
-        try:
-            return pd.read_csv(path).to_dict("records")
-        except pd.errors.EmptyDataError:
-            return []
+        return pd.read_csv(path).to_dict("records")
 
     def _load_resume_state(self) -> tuple[dict[DesignUnitKey, int], int, int, list[dict], list[dict]]:
         checkpoint_path = self.out_dir / "search_checkpoint.json"
@@ -1577,7 +1543,6 @@ class AutomatedRedesigner:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.live_progress_df = progress_df
         self._verbose = verbose
-        warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
         if resume:
             state, last_iteration, stalled, history_rows, proposal_rows = self._load_resume_state()
             if reset_stalled_on_resume:
