@@ -4,6 +4,7 @@ import itertools
 import json
 import math
 import random
+import warnings
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,13 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 import torch
+
+# tqdm is optional
+try:
+    from tqdm import tqdm
+except Exception:  # pragma: no cover
+    def tqdm(x, **kwargs):
+        return x
 
 import recursive_corepromoter_design as legacy
 from BPM.BPM import score_m10 as bpm_score_m10
@@ -1277,6 +1285,7 @@ class AutomatedRedesigner:
         self.max_stalled_iterations = max_stalled_iterations
         self.evaluated: set[tuple] = set()
         self.live_progress_df: pd.DataFrame | None = None
+        self._verbose: bool = False
 
     def evaluate_state(
         self,
@@ -1453,7 +1462,8 @@ class AutomatedRedesigner:
             return None
         self.evaluated.add(signature)
         change_text = ";".join(f"{key.label()}->{idx}" for key, idx in changes.items())
-        print(f"    evaluating {proposal_type}: {change_text}", flush=True)
+        if self._verbose:
+            print(f"    evaluating {proposal_type}: {change_text}", flush=True)
         candidate_state = dict(state)
         candidate_state.update(changes)
         try:
@@ -1483,14 +1493,15 @@ class AutomatedRedesigner:
             "scan": scan,
             "change_map": changes,
         }
-        print(
-            "      "
-            f"m10={summary['m10_shifted_rate']:.2%} "
-            f"(out={summary['m10_out_of_range_count']}) | "
-            f"m35={summary['m35_shifted_rate']:.2%} "
-            f"(out={summary['m35_out_of_range_count']})",
-            flush=True,
-        )
+        if self._verbose:
+            print(
+                "      "
+                f"m10={summary['m10_shifted_rate']:.2%} "
+                f"(out={summary['m10_out_of_range_count']}) | "
+                f"m35={summary['m35_shifted_rate']:.2%} "
+                f"(out={summary['m35_out_of_range_count']})",
+                flush=True,
+            )
         return result
 
     def run(
@@ -1500,20 +1511,22 @@ class AutomatedRedesigner:
         resume: bool = False,
         reset_stalled_on_resume: bool = True,
         progress_df: pd.DataFrame | None = None,
+        verbose: bool = False,
     ) -> DesignResult:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.live_progress_df = progress_df
+        self._verbose = verbose
+        warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
         if resume:
             state, last_iteration, stalled, history_rows, proposal_rows = self._load_resume_state()
             if reset_stalled_on_resume:
                 stalled = 0
             elements, scan, summary = self.evaluate_state(state)
             start_iteration = last_iteration + 1
-            print(
+            tqdm.write(
                 f"[Resume] {self.out_dir}\n"
                 f"  continuing from completed iteration {last_iteration}; "
-                f"next iteration={start_iteration}; additional allowance={self.max_iterations}",
-                flush=True,
+                f"next iteration={start_iteration}; additional allowance={self.max_iterations}"
             )
         else:
             state = dict(initial_state or self.design_space.initial_state())
@@ -1541,21 +1554,29 @@ class AutomatedRedesigner:
         last_completed_iteration = start_iteration - 1
         stop_reason = "running"
         end_iteration = start_iteration + self.max_iterations - 1
-        for iteration in range(start_iteration, end_iteration + 1):
+        pbar = tqdm(range(start_iteration, end_iteration + 1), desc="Batch6 search")
+        for iteration in pbar:
             if summary["global_validation_pass"]:
                 stop_reason = "validation_passed"
                 break
             phase = summary["phase"]
             current_objective = objective_for_phase(summary, phase)
-            print(
-                f"\n[Iteration {iteration}] phase={phase} | "
-                f"m10 shifted={summary['m10_shifted_rate']:.2%} "
-                f"out={summary['m10_out_of_range_count']} max_abs={summary['m10_max_abs_shift']} | "
-                f"m35 shifted={summary['m35_shifted_rate']:.2%} "
-                f"out={summary['m35_out_of_range_count']} max_abs={summary['m35_max_abs_shift']} | "
-                f"stalled={stalled}/{self.max_stalled_iterations}",
-                flush=True,
+            pbar.set_postfix(
+                phase=phase,
+                m10=f"{summary['m10_shifted_rate']:.1%}",
+                m35=f"{summary['m35_shifted_rate']:.1%}",
+                stalled=f"{stalled}/{self.max_stalled_iterations}",
             )
+            if self._verbose:
+                print(
+                    f"\n[Iteration {iteration}] phase={phase} | "
+                    f"m10 shifted={summary['m10_shifted_rate']:.2%} "
+                    f"out={summary['m10_out_of_range_count']} max_abs={summary['m10_max_abs_shift']} | "
+                    f"m35 shifted={summary['m35_shifted_rate']:.2%} "
+                    f"out={summary['m35_out_of_range_count']} max_abs={summary['m35_max_abs_shift']} | "
+                    f"stalled={stalled}/{self.max_stalled_iterations}",
+                    flush=True,
+                )
             diagnosis = diagnose_shift_drivers(
                 scan,
                 elements,
@@ -1566,11 +1587,12 @@ class AutomatedRedesigner:
             diagnosis["risk"].to_csv(self.out_dir / f"risk_iter_{iteration:02d}.csv", index=False)
             diagnosis["overlap"].to_csv(self.out_dir / f"overlap_iter_{iteration:02d}.csv", index=False)
             drivers = diagnosis["driver_units"][: self.n_driver_units]
-            print(
-                f"  dominant {phase}_shift={diagnosis['dominant_shift']} | "
-                f"drivers={[key.label() for key in drivers]}",
-                flush=True,
-            )
+            if self._verbose:
+                print(
+                    f"  dominant {phase}_shift={diagnosis['dominant_shift']} | "
+                    f"drivers={[key.label() for key in drivers]}",
+                    flush=True,
+                )
             if not drivers:
                 history_rows.append(
                     {"iteration": iteration, "accepted": False, "changes": "no_actionable_driver", **summary}
@@ -1589,7 +1611,8 @@ class AutomatedRedesigner:
                 driver_pool_status.append(
                     f"{key.label()} remaining={remaining}/{total_alternatives}"
                 )
-            print(f"  driver pools: {driver_pool_status}", flush=True)
+            if self._verbose:
+                print(f"  driver pools: {driver_pool_status}", flush=True)
 
             evaluated_proposals = []
             for key in drivers:
@@ -1628,7 +1651,7 @@ class AutomatedRedesigner:
                 self._persist_progress(
                     iteration, stalled, state, elements, summary, history_rows, proposal_rows, stop_reason
                 )
-                print("  STOP: no unevaluated candidates remain for the selected drivers.", flush=True)
+                tqdm.write("  STOP: no unevaluated candidates remain for the selected drivers.")
                 break
 
             for proposal in evaluated_proposals:
@@ -1668,21 +1691,19 @@ class AutomatedRedesigner:
                     {"iteration": iteration, "accepted": True, "changes": best["changes"], **summary}
                 )
                 elements.to_csv(self.out_dir / f"accepted_elements_iter_{iteration:02d}.csv", index=False)
-                print(
+                tqdm.write(
                     f"  ACCEPT {best['proposal_type']}: {best['changes']} | "
                     f"m10={summary['m10_shifted_rate']:.2%}, "
-                    f"m35={summary['m35_shifted_rate']:.2%}",
-                    flush=True,
+                    f"m35={summary['m35_shifted_rate']:.2%}"
                 )
             else:
                 stalled += 1
                 history_rows.append(
                     {"iteration": iteration, "accepted": False, "changes": "no_strict_improvement", **summary}
                 )
-                print(
+                tqdm.write(
                     f"  NO ACCEPTED MOVE: strict objective did not improve "
-                    f"(stalled={stalled}/{self.max_stalled_iterations}).",
-                    flush=True,
+                    f"(stalled={stalled}/{self.max_stalled_iterations})."
                 )
             last_completed_iteration = iteration
             self._persist_progress(
@@ -1714,12 +1735,11 @@ class AutomatedRedesigner:
             proposal_rows,
             stop_reason,
         )
-        print(
+        tqdm.write(
             f"\n[Search stopped] reason={stop_reason} | "
             f"last_iteration={last_completed_iteration} | "
             f"m10={summary['m10_shifted_rate']:.2%} | "
-            f"m35={summary['m35_shifted_rate']:.2%}",
-            flush=True,
+            f"m35={summary['m35_shifted_rate']:.2%}"
         )
 
         final_diagnosis = diagnose_shift_drivers(
