@@ -33,7 +33,10 @@ DEFAULT_PARENT_OUT = legacy.DEFAULT_PARENT_OUT
 
 
 ELEMENTS = ("UP", "m35", "spacer", "m10", "DIS", "ITS")
-VERSIONS = ("v1", "v2", "v3", "v4", "v5")
+# Spacer_v3 is derived as Spacer_v2[:-2] + "TG" instead of being sourced from its
+# own energy bin, so bin 3 never contributes spacer candidates and v2/v3 form one
+# coupled design unit. The spacer therefore needs at least this many bins.
+SPACER_DERIVED_VERSION_IDX = 3
 WINDOW_NAMES = (
     "W0_UP_1",
     "W1_UP_2",
@@ -89,43 +92,60 @@ class DesignConfig:
     gap_length: int = 3
     gap_seed: int = 777
     random_seed: int = 777
-    n_energy_bins: int = 5
+    # Fallback bin count for elements absent from mutable_energy_fraction_ranges.
+    n_energy_bins: int = 4
+    default_energy_fraction_range: tuple[float, float] = (0.0, 0.8)
     max_candidates_per_unit: int = 60
     max_abs_shift: int = 2
     max_shift_rate: float = 0.10
     scan_batch_size: int = 1024
     require_derived_spacer_in_database: bool = False
-    # Optional per-element mutable energy range on the observed min-max axis.
-    # Example: {"m35": (0.20, 1.00), "m10": (0.20, 1.00)} creates four
-    # equal-width mutable bins spanning 20%-100% for v1-v4. Elements without
-    # an override retain the legacy five-bin full-range definition, of which
-    # bins 1-4 are mutable and v5 is the locked consensus.
-    mutable_energy_fraction_ranges: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # Per-element pooling boundary: how much of the observed min-max energy axis
+    # to bin, and into how many bins. Accepts (lower, upper) - which falls back to
+    # n_energy_bins - or (lower, upper, n_bins). Every bin becomes one mutable
+    # design version, so an element with N bins contributes versions v1..vN plus a
+    # locked consensus at v{N+1}, and the library holds prod(N_e + 1) variants.
+    # Example: {"UP": (0.0, 0.8, 4), "m35": (0.3, 0.9, 4)}.
+    mutable_energy_fraction_ranges: dict[
+        str, tuple[float, float] | tuple[float, float, int]
+    ] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         missing = set(ELEMENTS) - set(self.consensus)
         if missing:
             raise ValueError(f"Missing consensus sequences: {sorted(missing)}")
-        if self.n_energy_bins != 5:
-            raise ValueError("This design uses exactly five equal-width energy bins.")
+        if self.n_energy_bins < 1:
+            raise ValueError(f"n_energy_bins must be at least 1; received {self.n_energy_bins}")
         if self.gap_length != 3:
             raise ValueError("The current CorePromoter design specification requires a 3-bp gap.")
+        self.default_energy_fraction_range = _validated_fraction_range(
+            "default_energy_fraction_range", self.default_energy_fraction_range
+        )
         normalized_ranges = {}
         for element, bounds in self.mutable_energy_fraction_ranges.items():
             if element not in ELEMENTS:
                 raise ValueError(f"Unknown element in mutable energy range: {element!r}")
-            if len(bounds) != 2:
+            if len(bounds) == 2:
+                n_bins = self.n_energy_bins
+            elif len(bounds) == 3:
+                n_bins = int(bounds[2])
+            else:
                 raise ValueError(
-                    f"Mutable energy range for {element} must contain (lower, upper), not {bounds!r}"
+                    f"Mutable energy range for {element} must be (lower, upper) or "
+                    f"(lower, upper, n_bins), not {bounds!r}"
                 )
-            lower, upper = map(float, bounds)
-            if not (0.0 <= lower < upper <= 1.0):
-                raise ValueError(
-                    f"Mutable energy range for {element} must satisfy 0 <= lower < upper <= 1; "
-                    f"received {(lower, upper)}"
-                )
-            normalized_ranges[element] = (lower, upper)
+            if n_bins < 1:
+                raise ValueError(f"Mutable bin count for {element} must be at least 1; received {n_bins}")
+            lower, upper = _validated_fraction_range(f"mutable energy range for {element}", bounds[:2])
+            normalized_ranges[element] = (lower, upper, n_bins)
         self.mutable_energy_fraction_ranges = normalized_ranges
+        spacer_bins = self.n_mutable_bins("spacer")
+        if spacer_bins < SPACER_DERIVED_VERSION_IDX:
+            raise ValueError(
+                f"The spacer needs at least {SPACER_DERIVED_VERSION_IDX} bins because "
+                f"v{SPACER_DERIVED_VERSION_IDX} is derived from v2 rather than sourced "
+                f"from a bin; received {spacer_bins}"
+            )
         for element, expected_len in ELEMENT_LENGTHS.items():
             seq = normalize_dna(self.consensus[element])
             if len(seq) != expected_len:
@@ -138,9 +158,29 @@ class DesignConfig:
 
     def energy_bin_spec(self, element: str) -> tuple[int, float, float, str]:
         if element in self.mutable_energy_fraction_ranges:
-            lower, upper = self.mutable_energy_fraction_ranges[element]
-            return 4, lower, upper, "custom_mutable_range"
-        return self.n_energy_bins, 0.0, 1.0, "legacy_full_range"
+            lower, upper, n_bins = self.mutable_energy_fraction_ranges[element]
+            return n_bins, lower, upper, "custom_mutable_range"
+        lower, upper = self.default_energy_fraction_range
+        return self.n_energy_bins, lower, upper, "default_mutable_range"
+
+    def n_mutable_bins(self, element: str) -> int:
+        """Number of energy bins for this element; each bin is one mutable version."""
+        if element in self.mutable_energy_fraction_ranges:
+            return self.mutable_energy_fraction_ranges[element][2]
+        return self.n_energy_bins
+
+    def mutable_versions(self, element: str) -> tuple[str, ...]:
+        return tuple(f"v{i}" for i in range(1, self.n_mutable_bins(element) + 1))
+
+    def locked_version(self, element: str) -> str:
+        """The locked consensus always occupies the slot after the last mutable bin."""
+        return f"v{self.n_mutable_bins(element) + 1}"
+
+    def versions_for(self, element: str) -> tuple[str, ...]:
+        return self.mutable_versions(element) + (self.locked_version(element),)
+
+    def n_variants(self) -> int:
+        return math.prod(len(self.versions_for(element)) for element in ELEMENTS)
 
 
 @dataclass
@@ -160,6 +200,20 @@ class DesignResult:
 
 def normalize_dna(seq: str) -> str:
     return "".join(str(seq).upper().split()).replace("U", "T")
+
+
+def _validated_fraction_range(label: str, bounds) -> tuple[float, float]:
+    lower, upper = (float(bounds[0]), float(bounds[1]))
+    if not (0.0 <= lower < upper <= 1.0):
+        raise ValueError(
+            f"{label} must satisfy 0 <= lower < upper <= 1; received {(lower, upper)}"
+        )
+    return lower, upper
+
+
+def version_index(version: str) -> int:
+    """Sort key for version labels, so v10 orders after v9 rather than after v1."""
+    return int(str(version)[1:])
 
 
 def _safe_torch_load(path: Path, device: torch.device):
@@ -417,6 +471,9 @@ class DesignSpace:
         self.models = models
         self.scored_pools = scored_pools
         self.unit_candidates: dict[DesignUnitKey, pd.DataFrame] = {}
+        # Energy of the locked consensus. Kept under the historical name v5_energy
+        # because it is also an output column; the locked slot is v{n_bins+1} and is
+        # only literally v5 when the element uses four bins.
         self.v5_energy = {
             element: float(models.score(element, [config.consensus[element]])[0])
             for element in ELEMENTS
@@ -431,24 +488,35 @@ class DesignSpace:
             & (pool["sequence"] != self.config.consensus[element])
         ].copy()
         if sub.empty:
+            n_bins, lower, upper, _ = self.config.energy_bin_spec(element)
             raise ValueError(
-                f"No eligible sequences for {element} v{bin_id}: "
-                f"energy_bin={bin_id}, constraint=energy_below_v5"
+                f"No eligible sequences for {element} v{bin_id}: energy_bin={bin_id} "
+                f"of {n_bins} over fraction {lower:.2f}-{upper:.2f}, "
+                f"constraint=energy_below_{self.config.locked_version(element)} "
+                f"({self.v5_energy[element]:.4f}). Lower that element's upper_fraction "
+                f"in mutable_energy_fraction_ranges so the bin stays below the consensus."
             )
         return sub.sort_values(["distance_to_bin_center", "sequence"]).head(
             self.config.max_candidates_per_unit
         ).reset_index(drop=True)
 
     def _build_units(self) -> None:
-        for element in ("UP", "m35", "m10", "DIS", "ITS"):
-            for version_idx in range(1, 5):
+        for element in ELEMENTS:
+            if element == "spacer":
+                continue
+            for version_idx in range(1, self.config.n_mutable_bins(element) + 1):
                 key = DesignUnitKey(element, f"v{version_idx}")
                 sub = self._eligible_bin(element, version_idx).copy()
                 sub["version"] = f"v{version_idx}"
                 sub["selection_mode"] = "database_bin"
                 self.unit_candidates[key] = sub
 
-        for version_idx in (1, 4):
+        # The spacer skips two bins here: bin 2 is consumed by the coupled
+        # v2/v3 pair below, and bin SPACER_DERIVED_VERSION_IDX is never sourced
+        # at all because that version is derived from v2.
+        for version_idx in range(1, self.config.n_mutable_bins("spacer") + 1):
+            if version_idx in (2, SPACER_DERIVED_VERSION_IDX):
+                continue
             key = DesignUnitKey("spacer", f"v{version_idx}")
             sub = self._eligible_bin("spacer", version_idx).copy()
             sub["version"] = f"v{version_idx}"
@@ -479,8 +547,9 @@ class DesignSpace:
             base = base[base["v3_in_database"]]
         if base.empty:
             raise ValueError(
-                "No eligible Spacer_v2/v3 pair: v2 must come from bin 2 and "
-                "v3=v2[:-2]+'TG' must remain below Spacer_v5 energy."
+                f"No eligible Spacer_v2/v{SPACER_DERIVED_VERSION_IDX} pair: v2 must come "
+                f"from bin 2 and v{SPACER_DERIVED_VERSION_IDX}=v2[:-2]+'TG' must remain "
+                f"below Spacer_{self.config.locked_version('spacer')} energy."
             )
         self.unit_candidates[DesignUnitKey("spacer", "v2_v3_pair")] = base.head(
             self.config.max_candidates_per_unit
@@ -587,10 +656,43 @@ class DesignSpace:
 
     def selected_elements(self, state: dict[DesignUnitKey, int]) -> pd.DataFrame:
         rows = []
+        derived_version = f"v{SPACER_DERIVED_VERSION_IDX}"
         for element in ELEMENTS:
-            if element != "spacer":
-                for version_idx in range(1, 5):
-                    version = f"v{version_idx}"
+            pair = None
+            if element == "spacer":
+                pair = self.unit_candidates[DesignUnitKey("spacer", "v2_v3_pair")].iloc[
+                    int(state[DesignUnitKey("spacer", "v2_v3_pair")])
+                ]
+            for version in self.config.mutable_versions(element):
+                if pair is not None and version == "v2":
+                    rows.append(
+                        {
+                            "element": "spacer",
+                            "version": "v2",
+                            "design_unit_id": "v2_v3_pair",
+                            "sequence": pair["sequence_v2"],
+                            "energy": float(pair["energy_v2"]),
+                            "energy_bin": int(pair["energy_bin_v2"]),
+                            "selection_mode": "database_bin",
+                            "locked": False,
+                            "in_database": True,
+                        }
+                    )
+                elif pair is not None and version == derived_version:
+                    rows.append(
+                        {
+                            "element": "spacer",
+                            "version": derived_version,
+                            "design_unit_id": "v2_v3_pair",
+                            "sequence": pair["sequence_v3"],
+                            "energy": float(pair["energy_v3"]),
+                            "energy_bin": pair["energy_bin_v3"],
+                            "selection_mode": "derived_tail_TG",
+                            "locked": False,
+                            "in_database": bool(pair["v3_in_database"]),
+                        }
+                    )
+                else:
                     key = DesignUnitKey(element, version)
                     row = self.unit_candidates[key].iloc[int(state[key])]
                     rows.append(
@@ -606,70 +708,13 @@ class DesignSpace:
                             "in_database": True,
                         }
                     )
-            else:
-                row_v1 = self.unit_candidates[DesignUnitKey("spacer", "v1")].iloc[
-                    int(state[DesignUnitKey("spacer", "v1")])
-                ]
-                pair = self.unit_candidates[DesignUnitKey("spacer", "v2_v3_pair")].iloc[
-                    int(state[DesignUnitKey("spacer", "v2_v3_pair")])
-                ]
-                row_v4 = self.unit_candidates[DesignUnitKey("spacer", "v4")].iloc[
-                    int(state[DesignUnitKey("spacer", "v4")])
-                ]
-                rows.extend(
-                    [
-                        {
-                            "element": "spacer",
-                            "version": "v1",
-                            "design_unit_id": "v1",
-                            "sequence": row_v1["sequence"],
-                            "energy": float(row_v1["energy"]),
-                            "energy_bin": int(row_v1["energy_bin"]),
-                            "selection_mode": "database_bin",
-                            "locked": False,
-                            "in_database": True,
-                        },
-                        {
-                            "element": "spacer",
-                            "version": "v2",
-                            "design_unit_id": "v2_v3_pair",
-                            "sequence": pair["sequence_v2"],
-                            "energy": float(pair["energy_v2"]),
-                            "energy_bin": int(pair["energy_bin_v2"]),
-                            "selection_mode": "database_bin",
-                            "locked": False,
-                            "in_database": True,
-                        },
-                        {
-                            "element": "spacer",
-                            "version": "v3",
-                            "design_unit_id": "v2_v3_pair",
-                            "sequence": pair["sequence_v3"],
-                            "energy": float(pair["energy_v3"]),
-                            "energy_bin": pair["energy_bin_v3"],
-                            "selection_mode": "derived_tail_TG",
-                            "locked": False,
-                            "in_database": bool(pair["v3_in_database"]),
-                        },
-                        {
-                            "element": "spacer",
-                            "version": "v4",
-                            "design_unit_id": "v4",
-                            "sequence": row_v4["sequence"],
-                            "energy": float(row_v4["energy"]),
-                            "energy_bin": int(row_v4["energy_bin"]),
-                            "selection_mode": "database_bin",
-                            "locked": False,
-                            "in_database": True,
-                        },
-                    ]
-                )
 
+            locked_version = self.config.locked_version(element)
             rows.append(
                 {
                     "element": element,
-                    "version": "v5",
-                    "design_unit_id": "locked_v5",
+                    "version": locked_version,
+                    "design_unit_id": f"locked_{locked_version}",
                     "sequence": self.config.consensus[element],
                     "energy": self.v5_energy[element],
                     "energy_bin": self._energy_bin_for_value(element, self.v5_energy[element]),
@@ -680,42 +725,55 @@ class DesignSpace:
                     ),
                 }
             )
-        return pd.DataFrame(rows).sort_values(["element", "version"]).reset_index(drop=True)
+        out = pd.DataFrame(rows)
+        out["_version_idx"] = out["version"].map(version_index)
+        return (
+            out.sort_values(["element", "_version_idx"])
+            .drop(columns="_version_idx")
+            .reset_index(drop=True)
+        )
 
     def validate_state(self, state: dict[DesignUnitKey, int]) -> None:
         selected = self.selected_elements(state)
         for element, sub in selected.groupby("element"):
-            if len(sub) != 5 or set(sub["version"]) != set(VERSIONS):
-                raise ValueError(f"{element} does not contain exactly v1-v5.")
+            expected = self.config.versions_for(element)
+            if len(sub) != len(expected) or set(sub["version"]) != set(expected):
+                raise ValueError(
+                    f"{element} does not contain exactly {expected[0]}-{expected[-1]}."
+                )
             if sub["sequence"].duplicated().any():
                 dup = sub.loc[sub["sequence"].duplicated(False), ["version", "sequence"]]
                 raise ValueError(f"Duplicate {element} versions:\n{dup.to_string(index=False)}")
-            v5 = sub.loc[sub["version"] == "v5"].iloc[0]
-            if v5["sequence"] != self.config.consensus[element]:
+            locked_version = self.config.locked_version(element)
+            locked = sub.loc[sub["version"] == locked_version].iloc[0]
+            if locked["sequence"] != self.config.consensus[element]:
                 raise ValueError(f"Locked consensus changed for {element}.")
-            weaker = sub[sub["version"] != "v5"]
-            if not (weaker["energy"] < float(v5["energy"])).all():
-                bad = weaker[weaker["energy"] >= float(v5["energy"])]
-                raise ValueError(f"{element} contains v1-v4 energy >= v5:\n{bad}")
+            weaker = sub[sub["version"] != locked_version]
+            if not (weaker["energy"] < float(locked["energy"])).all():
+                bad = weaker[weaker["energy"] >= float(locked["energy"])]
+                raise ValueError(
+                    f"{element} contains mutable energy >= {locked_version}:\n{bad}"
+                )
+        derived_version = f"v{SPACER_DERIVED_VERSION_IDX}"
         spacer = selected[selected["element"] == "spacer"].set_index("version")
-        expected_v3 = str(spacer.loc["v2", "sequence"])[:-2] + "TG"
-        if spacer.loc["v3", "sequence"] != expected_v3:
-            raise ValueError("Spacer_v3 is not Spacer_v2[:-2] + 'TG'.")
+        expected_derived = str(spacer.loc["v2", "sequence"])[:-2] + "TG"
+        if spacer.loc[derived_version, "sequence"] != expected_derived:
+            raise ValueError(f"Spacer_{derived_version} is not Spacer_v2[:-2] + 'TG'.")
 
     @staticmethod
     def state_signature(state: dict[DesignUnitKey, int]) -> tuple:
         return tuple((key.element, key.unit_id, int(state[key])) for key in sorted(state, key=lambda x: x.label()))
 
     def unit_for_slot(self, element: str, version: str) -> DesignUnitKey | None:
-        if version == "v5":
+        if version == self.config.locked_version(element):
             return None
-        if element == "spacer" and version in {"v2", "v3"}:
+        if element == "spacer" and version in {"v2", f"v{SPACER_DERIVED_VERSION_IDX}"}:
             return DesignUnitKey("spacer", "v2_v3_pair")
         return DesignUnitKey(element, version)
 
 
 def build_balanced_gap_assignment(config: DesignConfig) -> pd.DataFrame:
-    version_combos = list(itertools.product(VERSIONS, repeat=len(ELEMENTS)))
+    version_combos = list(itertools.product(*(config.versions_for(e) for e in ELEMENTS)))
     kmers = ["".join(x) for x in itertools.product("ACGT", repeat=config.gap_length)]
     n_variants = len(version_combos)
     base, remainder = divmod(n_variants, len(kmers))
@@ -776,8 +834,11 @@ def assemble_library(
     out["design_m35_start"] = len(config.bg5) + out["UP_seq"].str.len() + config.gap_length
     out["design_spacer_len"] = out["spacer_seq"].str.len()
     out["design_m10_start"] = out["design_m35_start"] + 6 + out["design_spacer_len"]
-    if len(out) != 5 ** 6:
-        raise AssertionError(f"Expected 15,625 variants; assembled {len(out):,}.")
+    expected_variants = config.n_variants()
+    if len(out) != expected_variants:
+        raise AssertionError(
+            f"Expected {expected_variants:,} variants; assembled {len(out):,}."
+        )
     return out
 
 
@@ -1220,7 +1281,7 @@ def diagnose_shift_drivers(
                 "dominant_shift": dominant,
                 "element": element,
                 "version": version,
-                "design_unit_id": unit.unit_id if unit else "locked_v5",
+                "design_unit_id": unit.unit_id if unit else f"locked_{config.locked_version(element)}",
                 "actionable": unit is not None,
                 "n_contexts": n_contexts,
                 "n_target_shift": n_target,
@@ -1535,7 +1596,7 @@ class AutomatedRedesigner:
             else:
                 elements, scan, summary = initial_evaluation
             elements.to_csv(self.out_dir / "initial_elements.csv", index=False)
-            scan.to_csv(self.out_dir / "initial_scan_15625.csv", index=False)
+            scan.to_csv(self.out_dir / f"initial_scan_{self.config.n_variants()}.csv", index=False)
             _json_dump(self.out_dir / "initial_validation.json", summary)
             history_rows = [{"iteration": 0, "accepted": True, "changes": "initial", **summary}]
             proposal_rows = []
@@ -1752,7 +1813,7 @@ class AutomatedRedesigner:
         history = pd.DataFrame(history_rows)
         proposals = pd.DataFrame(proposal_rows)
         elements.to_csv(self.out_dir / "final_elements.csv", index=False)
-        scan.to_csv(self.out_dir / "final_scan_15625.csv", index=False)
+        scan.to_csv(self.out_dir / f"final_scan_{self.config.n_variants()}.csv", index=False)
         history.to_csv(self.out_dir / "search_history.csv", index=False)
         proposals.to_csv(self.out_dir / "proposal_history.csv", index=False)
         final_diagnosis["risk"].to_csv(self.out_dir / "final_driver_risk.csv", index=False)
