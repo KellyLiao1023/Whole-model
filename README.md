@@ -1,112 +1,122 @@
 # Promoter Library Design
 
-以 PyTorch 建立 promoter expression scoring models，並利用 whole/CorePromoter model、個別 promoter element models 與 recursive search 設計 promoter library。
+以 PyTorch 建立 promoter expression scoring models，並利用 whole/CorePromoter model、個別 promoter element models 與 automated search 設計 promoter library。
 
 本專案目前包含：
 
-- baseline whole/CorePromoter model 訓練與權重
+- baseline whole/CorePromoter model 的訓練流程與 frozen checkpoint
 - 使用多物種 TSS/PAS 資料改良 CorePromoter architecture 辨識能力
 - UP、-35、spacer、-10、DIS、ITS 等 element scoring models
-- recursive promoter library design 與 restriction-site / sequence QC
-- baseline 與 TSS/PAS CorePromoter model 的比較評估
+- 以 energy bin 從 high-throughput database 取樣的 automated promoter library redesign
+- CorePromoter model energy 與天然 promoter 保守度的關聯分析
+- restriction-site scan、PAS/BPM library QC 與 element replacement 等輔助工具
 
 ## Pipeline 概覽
 
 ```text
-Expression libraries
+Expression libraries (PL / SL16 / SL17 / SL18 / DL / UL / ITS)
+        │
+        ├──► Model_CorePromoter_clean.ipynb ──► weights_CorePromoter_clean.pt
+        │        (whole model 訓練與 filter logo)        [frozen baseline]
+        │
+        └──► Model_UP_v0 / Model_PL / Model_Sp17 /
+             Model_Dis / Model_ITS.ipynb  ──────────────► weights_UP / Sp16-18 /
+                                                          Dis / ITS.pt、BPM 參數
+TSS/PAS workbook (Data_S1)
         │
         ▼
-Model_CorePromoter_clean.ipynb
+Model_CorePromoter_TSS_pretrain.ipynb 或 train_corepromoter_tss_pas.py
         │
-        └── weights_CorePromoter_clean.pt  (baseline whole model)
+        ├──► weights_CorePromoter_tss_arch.pt
+        └──► weights_CorePromoter_tss_pas.pt
                         │
-TSS/PAS workbook ──────┤
-                        ▼
-Model_CorePromoter_TSS_pretrain.ipynb
-或 train_corepromoter_tss_pas.py
-                        │
-                        ├── weights_CorePromoter_tss_arch.pt
-                        └── weights_CorePromoter_tss_pas.pt
-                                      │
-Element models + sequence tables ─────┤
-                                      ▼
-Model_CorePromoter_recursive_design.ipynb
-                                      │
-                                      ▼
-                         promoter library outputs
+Element models + energy bins ───┤
+                                ▼
+        Model_CorePromoter_recursive_design.ipynb
+        (automated_promoter_library_design.py)
+                                │
+                                ▼
+                    promoter library outputs
+
+weights_CorePromoter_clean.pt ──► Model_CorePromoter_energy_vs_conservation.ipynb
+                                  (energy vs IC / KL / log2 enrichment)
 ```
 
-訓練與 recursive design 是分開的步驟。模型完成訓練並儲存 checkpoint 後，recursive design 只會載入指定權重進行評分與搜尋，不會自動重新訓練模型。
+訓練與 library design 是分開的步驟。checkpoint 儲存後，design 只會載入指定權重進行評分與搜尋，不會自動重新訓練模型。
 
 ## 主要目錄
 
 ```text
 MS2_Data_PyTorch/
 ├── scripts/
-│   ├── Model_CorePromoter_clean.ipynb
-│   ├── Model_CorePromoter_TSS_pretrain.ipynb
-│   ├── Model_CorePromoter_recursive_design.ipynb
-│   ├── Model_UP_v0.ipynb
-│   ├── Model_PL.ipynb
-│   ├── Model_Sp17.ipynb
-│   ├── Model_Dis.ipynb
-│   ├── Model_ITS.ipynb
-│   ├── train_corepromoter_tss_pas.py
-│   ├── evaluate_corepromoter_tss_pas.py
-│   ├── tss_pas_dataset.py
-│   ├── recursive_corepromoter_design.py
-│   ├── automated_promoter_library_design.py
-│   ├── pas_library_qc.py
-│   └── BPM/
-├── tables/                 # local experimental data; mostly excluded from Git
-└── weights/                # trained model checkpoints and metadata
+│   ├── Model_CorePromoter_clean.ipynb              # baseline whole model 訓練 + filter logo
+│   ├── Model_CorePromoter_v0.ipynb                 # clean 版之前的完整原始 notebook（保留參考）
+│   ├── Model_CorePromoter_TSS_pretrain.ipynb       # TSS/PAS 三階段訓練
+│   ├── Model_CorePromoter_recursive_design.ipynb   # automated library redesign（主要設計入口）
+│   ├── Model_CorePromoter_energy_vs_conservation.ipynb  # energy vs 天然保守度分析
+│   ├── Model_UP_v0.ipynb / Model_Sp17.ipynb / Model_Dis.ipynb / Model_ITS.ipynb
+│   │                                               # element scoring models
+│   ├── Model_PL.ipynb                              # -35 / -10 的 BPM data flow
+│   ├── RE_site_scan.ipynb                          # restriction site scan
+│   ├── automated_promoter_library_design.py        # energy-bin design space + 自動搜尋
+│   ├── recursive_corepromoter_design.py            # 共用 model/資料 primitives（legacy 入口仍保留）
+│   ├── train_corepromoter_tss_pas.py               # TSS/PAS 訓練 CLI
+│   ├── evaluate_corepromoter_tss_pas.py            # baseline vs TSS/PAS 評估 CLI
+│   ├── tss_pas_dataset.py                          # TSS/PAS 資料前處理 CLI
+│   ├── anchor_pull_replacement.py                  # 單一 element 的替換候選建議
+│   ├── pas_library_qc.py                           # PAS/BPM library QC CLI
+│   ├── util.py                                     # PFM / logo / 繪圖小工具
+│   └── BPM/                                        # BPM.py、util.py、Params_Con17.pkl
+├── tables/      # 本機 experimental data，除少數小檔外不納入 Git
+├── genomes/     # 參考基因體 GenBank 檔（*.gb，不納入 Git）
+├── weights/     # 已訓練的 checkpoint 與 metadata（納入 Git）
+├── figures/     # notebook 產生的圖（*.png / *.svg，不納入 Git）
+└── outputs/     # energy_vs_conservation 與 replacement 的輸出（不納入 Git）
 
-outputs/                    # generated run results; excluded from Git
-Promoter_library_design/    # downstream selection and QC tools
+outputs/                    # 根目錄 run 輸出：訓練、評估、library design（不納入 Git）
+Promoter_library_design/    # 下游候選/變體資料夾，不在本 repository 內
 ```
 
 ## Environment
 
-目前 repository 沒有鎖定版本的 `requirements.txt` 或 environment file。主要 Python dependencies 包含：
+`requirements.txt` 列出主要 dependencies，但沒有鎖定版本：
 
-- Python 3
-- PyTorch
-- NumPy
-- pandas
-- SciPy
-- scikit-learn
-- openpyxl
-- Jupyter
+```text
+torch, numpy, pandas, scipy, scikit-learn, openpyxl, jupyterlab, matplotlib, seaborn
+```
 
-建議建立獨立 virtual environment 後再安裝 dependencies。GPU 並非必要；scripts 的 `--device auto` 會在 CUDA 可用時使用 GPU，否則使用 CPU。
+下列套件目前**沒有**寫進 `requirements.txt`，但實際會用到，請自行補裝：
+
+| 套件 | 用在哪裡 |
+| --- | --- |
+| `biopython` | `Model_CorePromoter_energy_vs_conservation.ipynb` 讀 GenBank |
+| `logomaker` | `Model_CorePromoter_clean.ipynb` 與各 element model 的 sequence logo |
+| `tensorboard` | `Model_CorePromoter_clean.ipynb` / `Model_CorePromoter_v0.ipynb` 的 `SummaryWriter` |
+| `tqdm` | `automated_promoter_library_design.py` 的進度顯示（缺少時自動退回無進度條） |
+
+建議建立獨立 virtual environment 後再安裝。GPU 並非必要；CLI scripts 的 `--device auto` 會在 CUDA 可用時使用 GPU，notebook 則以 `torch.cuda.is_available()` 自動選擇。`Model_CorePromoter_energy_vs_conservation.ipynb` 固定使用 CPU。
 
 ## Local data requirements
 
-大型 experimental tables 不納入 Git，必須自行放在：
+大型 experimental tables 不納入 Git，必須自行放在 `MS2_Data_PyTorch/tables/`：
 
 ```text
-MS2_Data_PyTorch/tables/
+PL.pkl      # -35 / -10（Model_PL、BPM）
+SL16.pkl    # spacer 16
+SL17.pkl    # spacer 17
+SL18.pkl    # spacer 18
+DL.pkl      # DIS
+UL.pkl      # UP
+ITS.pkl     # ITS
 ```
 
-whole model 與 element models 會使用下列 pickle tables：
+其他資料需求：
 
-```text
-PL.pkl
-SL16.pkl
-SL17.pkl
-SL18.pkl
-DL.pkl
-UL.pkl
-ITS.pkl
-```
-
-TSS/PAS training 預設使用：
-
-```text
-MS2_Data_PyTorch/tables/Data_S1_20250826.xlsx
-```
-
-部分 design 流程也會使用 repository 內保留的小型 shared tables，例如 `elements_shared.csv` 與 `phage_promoters.csv`。
+- TSS/PAS 訓練與保守度分析：`MS2_Data_PyTorch/tables/Data_S1_20250826.xlsx`
+- 保守度分析的背景組成：`MS2_Data_PyTorch/genomes/NC_000913.2.gb`（E. coli K-12 MG1655）；`*.gb` 被 gitignore，需自行下載
+- `anchor_pull_replacement.py`：`tables/assembled_nn_scan_clean.csv`，以及 repository 之外的 `Promoter_library_design/candidates_output`、`variants_output`
+- `RE_site_scan.ipynb`：預設讀 `tables/assembled_scan.csv`
+- repository 內只保留兩份小型 shared tables：`elements_shared.csv`、`phage_promoters.csv`
 
 > Experimental tables 含本機資料，Git clone 後不會自動取得。執行前請先確認檔名、欄位與路徑符合 scripts 的預期。
 
@@ -118,23 +128,35 @@ MS2_Data_PyTorch/tables/Data_S1_20250826.xlsx
 MS2_Data_PyTorch/scripts/Model_CorePromoter_clean.ipynb
 ```
 
-完成後產生的主要 checkpoint 為：
+這本 notebook 做的是：組裝 7 個 library 的訓練資料 → 定義 8 filters × 3 spacer channels 的 `DNAFunctionPredictor` → train/test 評估 → 畫 conv1 filter logo 與 spacer 對齊後的 spatial logo。
 
-```text
-MS2_Data_PyTorch/weights/weights_CorePromoter_clean.pt
-```
+**它不會寫出 checkpoint。** `weights/weights_CorePromoter_clean.pt` 是已納入 Git 的 frozen baseline，下游（TSS/PAS 訓練、library design、保守度分析）一律載入這個檔案。要更新 baseline 必須手動存檔並確認下游是否需要重跑。相關的 `_history.csv`、`_metadata.json`、`_training_counts.csv` 同樣保留在 `weights/`。
 
-相關 training history、metadata 與 training counts 也儲存在 `MS2_Data_PyTorch/weights/`。
+`Model_CorePromoter_v0.ipynb` 是 clean 版之前的完整 notebook，含 BPM scan 與 debug cells，僅作參考。
 
-## 2. TSS/PAS CorePromoter training
+## 2. Element scoring models
+
+| Notebook | 來源 table | 產出 |
+| --- | --- | --- |
+| `Model_UP_v0.ipynb` | `UL.pkl` | `weights_UP.pt` |
+| `Model_Sp17.ipynb` | `SL16/17/18.pkl` | `weights_Sp16.pt` / `Sp17` / `Sp18` |
+| `Model_Dis.ipynb` | `DL.pkl` | `weights_Dis.pt` |
+| `Model_ITS.ipynb` | `ITS.pkl` | `weights_ITS.pt` |
+| `Model_PL.ipynb` | `PL.pkl` | BPM 參數（`BPM/Params_Con17.pkl`） |
+
+**-35 / -10 使用 BPM，不使用 NN weights。** `weights_minus35.pt` 與 `weights_minus10.pt` 雖然存在 `weights/`，但 pipeline 沒有任何 code 載入它們（`ElementModelBundle._load_all` 明確跳過），而且與 BPM 排序嚴重不一致（Spearman ρ = 0.37 / −0.22）。design 流程一律以 `-BPM dG` 作為 -35/-10 的 higher-is-stronger score。
+
+所有 element score 都是「higher = stronger」，但**不同 element 的分數不可互相比較**。
+
+## 3. TSS/PAS CorePromoter training
 
 ### Notebook 方式
-
-開啟並依序執行：
 
 ```text
 MS2_Data_PyTorch/scripts/Model_CorePromoter_TSS_pretrain.ipynb
 ```
+
+Cell 1 設定 → Cell 2 產生並驗證 dataset → Cell 3 訓練並存檔 → Cell 4 比較 baseline 與新 checkpoint → Cell 5 可選的 leave-one-library-out（預設關閉，`RUN_STRICT_LOLO`）。此流程不會覆寫 `weights_CorePromoter_clean.pt`。
 
 ### Command line 方式
 
@@ -155,18 +177,25 @@ python MS2_Data_PyTorch/scripts/train_corepromoter_tss_pas.py --prepare-data --d
 ```text
 MS2_Data_PyTorch/weights/weights_CorePromoter_tss_arch.pt
 MS2_Data_PyTorch/weights/weights_CorePromoter_tss_pas.pt
+outputs/tss_pas_dataset/tss_pas_processed.pkl
 outputs/corepromoter_tss_pas/<timestamp>/training_history.csv
 outputs/corepromoter_tss_pas/<timestamp>/model_metrics.csv
 outputs/corepromoter_tss_pas/<timestamp>/training_config.json
 ```
 
-若 processed dataset 已存在，可以省略 `--prepare-data`。常用選項可用以下指令查看：
+若 processed dataset 已存在，可以省略 `--prepare-data`；也可以單獨執行前處理：
+
+```powershell
+python MS2_Data_PyTorch/scripts/tss_pas_dataset.py --xlsx MS2_Data_PyTorch/tables/Data_S1_20250826.xlsx
+```
+
+常用選項（epoch 數、batch size、checkpoint 路徑等）：
 
 ```powershell
 python MS2_Data_PyTorch/scripts/train_corepromoter_tss_pas.py --help
 ```
 
-## 3. Model evaluation
+## 4. Model evaluation
 
 比較 baseline 與 TSS/PAS checkpoints：
 
@@ -174,7 +203,7 @@ python MS2_Data_PyTorch/scripts/train_corepromoter_tss_pas.py --help
 python MS2_Data_PyTorch/scripts/evaluate_corepromoter_tss_pas.py --device auto
 ```
 
-若需要較耗時的 leave-one-library-out comparison：
+若需要較耗時的 leave-one-library-out comparison（會重訓 fold models）：
 
 ```powershell
 python MS2_Data_PyTorch/scripts/evaluate_corepromoter_tss_pas.py --device auto --run-lolo
@@ -186,58 +215,212 @@ python MS2_Data_PyTorch/scripts/evaluate_corepromoter_tss_pas.py --device auto -
 outputs/corepromoter_tss_pas_evaluation/<timestamp>/
 ```
 
-## 4. Recursive promoter design
+## 5. Automated promoter library redesign
 
-開啟：
+主要入口：
 
 ```text
 MS2_Data_PyTorch/scripts/Model_CorePromoter_recursive_design.ipynb
+   └── 實作在 automated_promoter_library_design.py
 ```
 
-在設定 cell 選擇 CorePromoter scoring model：
+這個流程**從 high-throughput PKL database 挑選既有序列，不做 de novo generation**。每個 element 依自己的 energy 分布切成等寬 bin，每個 bin 出一個 mutable 版本，再加一個 locked consensus；所有 mutable 版本必須弱於 locked consensus。
+
+### Notebook batch 結構
+
+| Batch | 內容 |
+| --- | --- |
+| 0 | 設定：checkpoint、RUN_MODE、consensus、energy bin 邊界、search settings |
+| 0.5 | 六個 library 的 energy 分布圖與現行 pooling 邊界（用來決定 Batch 0 的數字） |
+| 1 | 載入 element models 與 core model，建立 scored pools 與 bin summary |
+| 2 | 建立 design units 並執行 hard constraints |
+| 3 | 固定且平均分配的 3-bp gap assignment 與 library 組裝 |
+| 4 | 初始 CorePromoter register scan 與 validation |
+| 5 | dominant shift 與 conditional-risk 診斷 |
+| 6 | 單調式自動 redesign 搜尋（可中斷、可 resume） |
+| 7 | 最終設計與 audit tables |
+
+### 主要設定（Batch 0）
 
 ```python
-CORE_MODEL_VARIANT = "tss_pas"  # "baseline" or "tss_pas"
+CORE_MODEL_VARIANT = "baseline"  # "baseline" or "tss_pas"
+RUN_MODE = "new"                 # "new" or "resume"
+RESUME_DIR = r.DEFAULT_PARENT_OUT / "automated_redesign_<timestamp>"
 ```
-
-對應 checkpoint：
 
 | Variant | Checkpoint |
 | --- | --- |
 | `baseline` | `weights_CorePromoter_clean.pt` |
 | `tss_pas` | `weights_CorePromoter_tss_pas.pt` |
 
-執行模式：
+energy bin 邊界逐 element 指定為 `(lower_fraction, upper_fraction, n_bins)`，數值是該 element 自己觀測 min–max energy 軸上的比例，可直接從 Batch 0.5 的上緣副軸讀出：
 
 ```python
-RUN_MODE = "new"     # 建立新 run
-RUN_MODE = "resume"  # 從既有 output directory 繼續
+ENERGY_BIN_RANGES = {
+    "UP":     (0.0, 0.8, 4),
+    "m35":    (0.3, 0.9, 4),
+    "spacer": (0.0, 0.8, 4),
+    "m10":    (0.3, 0.9, 4),
+    "DIS":    (0.0, 0.8, 4),
+    "ITS":    (0.0, 0.8, 4),
+}
 ```
 
-`resume` 模式需正確指定 `RESUME_DIR`。搜尋期間會持續寫入 checkpoint 與 progress files，因此中斷後可從已儲存狀態繼續。
+- N 個 bin → mutable `v1..vN` + locked consensus `v{N+1}`，一個 design state 組成 `∏(N_e + 1)` 個 variants；六個元素都是 4 個 bin 時為 `5^6 = 15,625`。
+- spacer 至少需要 3 個 bin：`Spacer_v3 = Spacer_v2[:-2] + "TG"` 是衍生的，不取自 bin 3，v2/v3 是同一個 coupled design unit。
+- 某個 bin 的上界超過 locked consensus 時該 bin 沒有 eligible sequence，`DesignSpace` 會直接報錯而不是跨 bin 補候選 —— 這時回 Batch 0 調低 `upper_fraction`。bin summary 的 `n_eligible_below_v5` 就是扣掉這個限制後真正可用的候選數。
 
-常見 recursive search 輸出包括：
+search 參數：
 
-- `search_progress.csv`
-- `proposal_history_checkpoint.csv`
-- `current_elements_checkpoint.csv`
-- `current_validation.json`
-- `search_checkpoint.json`
-- `final_elements.csv`
+```python
+SEARCH_SETTINGS = {
+    "max_iterations": 100,        # 每次 new/resume 執行的「額外」輪數，不是累積上限
+    "n_driver_units": 3,
+    "probe_candidates_per_unit": 2,
+    "pair_beam_width": 6,
+    "max_pair_evaluations": 8,
+    "max_stalled_iterations": 30,
+}
+```
 
-所有 generated outputs 預設位於根目錄的 `outputs/`，且不納入 Git。
+`redesigner.run(..., verbose=False)` 可設為 `True` 取得每個 proposal 的逐項輸出；`progress_df` 會在記憶體中每輪原地更新，手動中斷後仍可 `display(progress_df.tail())`。
+
+### Validation 規則
+
+```text
+m10_shift = observed_m10_start - design_m10_start
+m35_shift = observed_m35_start - design_m35_start
+```
+
+- `shift != 0` 就計入 shifted variant。
+- m10 與 m35 的 shifted rate 都必須 `< 10%`（`max_shift_rate`）。
+- 所有 shifted variants 必須落在 `-2..+2 bp`（`max_abs_shift`）。
+- 先最佳化 m10；m10 通過後轉為 hard constraint，再最佳化 m35。
+- 只有 global validation objective 嚴格改善才接受 replacement。
+
+### 輸出
+
+執行期間持續覆寫（可據此 resume）：
+
+```text
+search_progress.csv
+proposal_history_checkpoint.csv
+current_elements_checkpoint.csv
+current_validation.json
+search_checkpoint.json
+```
+
+結束後另外寫出：
+
+```text
+run_config.json / resume_config_<timestamp>.json
+energy_bin_summary.csv
+design_unit_candidate_counts.csv
+gap_assignment.csv
+initial_elements.csv / initial_assembled_<N>.csv / initial_scan_<N>.csv / initial_validation.json
+final_elements.csv / final_scan_<N>.csv / final_validation.json
+search_history.csv / proposal_history.csv
+final_driver_risk.csv / final_overlap_evidence.csv
+risk_iter_<NN>.csv / overlap_iter_<NN>.csv / accepted_elements_iter_<NN>.csv
+```
+
+預設輸出位置：
+
+```text
+outputs/019ec8ae-c0ac-7190-868c-5c4ba74a5396/automated_redesign_<timestamp>/
+outputs/energy_bin_cache/            # scored pool 快取，依 PKL 與 weight 的檔案 signature 失效
+```
+
+改動 bin 邊界不需要重算 energy，快取仍然有效；來源 PKL 或 element weights 更新後會自動重建。
+
+`recursive_corepromoter_design.py` 的 `run_recursive_design()` / `run_search_only()` 是舊版 percentile-band 搜尋入口，目前的 notebook 已不使用；該模組現在主要提供共用的 model 定義、資料組裝與 element model 載入。
+
+## 6. Energy vs conservation 分析
+
+```text
+MS2_Data_PyTorch/scripts/Model_CorePromoter_energy_vs_conservation.ipynb
+```
+
+把 `weights_CorePromoter_clean.pt` 拆成以 -10 為基準的 4 × L energy matrix，與真實 E. coli promoter 的位置保守度做關聯。因為 `conv2` 只是把 conv1 的 8 個 8-bp filter 擺在固定位移上相加，整個模型的 energy 嚴格可加，可以無損拆解：
+
+```text
+E(sequence) = Σ_i e(i, base_i) + conv2.bias[channel]
+```
+
+主要設定：
+
+```python
+SPACER = 17                     # 只分析 spacer=17（conv2 channel 1）
+SHEETS = ["Es.co", "Es.co$"]
+BACKGROUND_SOURCE = "genome"    # "genome" 或 "flank"
+CORE_RANGE = (-23, 9)
+RETRAIN = False                 # True = 依 clean notebook 流程重訓一次（需要 tables 裡的 pkl）
+```
+
+統計方法：Pearson r（含 5000 次 bootstrap 百分位 95% CI）、Spearman ρ（p 值改用 permutation test，n! 夠小時為 exact test），另有 `r_between` / `r_within` 拆解，用來區分「純鹼基組成偏好」與「位置專一資訊」。
+
+輸出：
+
+```text
+MS2_Data_PyTorch/outputs/energy_vs_conservation_Ecoli_sp17_genomebg_positions.csv
+MS2_Data_PyTorch/outputs/energy_vs_conservation_Ecoli_sp17_genomebg_perbase.csv
+MS2_Data_PyTorch/outputs/energy_vs_conservation_Ecoli_sp17_genomebg_correlations.csv
+MS2_Data_PyTorch/figures/EnergyVsIC_position_byElement_Ecoli_sp17.{png,svg}
+MS2_Data_PyTorch/figures/EnergyVsKL_position_byElement_Ecoli_sp17.{png,svg}
+MS2_Data_PyTorch/figures/EnergyVsLog2Enrichment_perbase_byElement_Ecoli_sp17.{png,svg}
+```
+
+`plot_by_element(..., groups=[...])` 可把欄位換成任意位置子集（元件名、rel_pos 區間、`element_positions()` 取前/後 N 個、或自訂遮罩），版面與統計標註完全一樣；notebook 內附五個已註解的範例。
+
+## 7. QC 與輔助工具
+
+### Restriction site scan
+
+```text
+MS2_Data_PyTorch/scripts/RE_site_scan.ipynb
+```
+
+對整條 `Sequence` 掃 19 種常用 restriction site（非回文的 Eco31I 連反股一起掃），輸出到 `tables/RE_scan_outputs/`：`ALL_files_RE_scan.csv`、`ALL_files_RE_summary.csv`、`common_absent_RE_sites.csv`。注意 BG5/BG3 固定背景內的切位會出現在每一條序列。
+
+### PAS / BPM library QC
+
+```powershell
+python MS2_Data_PyTorch/scripts/pas_library_qc.py --variant_table <variants.csv> --output_dir <out>
+```
+
+用 frozen BPM 參數（`BPM/Params_Con17.pkl`）檢查 fixed-register 設計是否可靠：以 Boltzmann 權重算 `P_design`，並以 `delta_E` 判斷是否存在比設計 register 更強的 off-register architecture。此腳本只使用參數，不重訓 PAS。若換成 higher-is-better 的模型，加上 `--score_is_energy false`。
+
+### 單一 element 替換建議
+
+```python
+from anchor_pull_replacement import suggest_replacements
+
+result = suggest_replacements(
+    scan_df, element_type="UP", bad_seq="...",
+    scanner=scan_corepromoter_model,   # 由 notebook 傳入，確保用同一個模型與 offset
+)
+```
+
+把某條有問題的 element 序列放進所有已鎖定 context 重掃，排序出替換候選，輸出 Excel 到 `MS2_Data_PyTorch/outputs/replacement_<element>_<seq>_<timestamp>.xlsx`。預設候選來源是 repository 之外的 `Promoter_library_design/candidates_output` 與 `variants_output`。
 
 ## Model checkpoint 說明
 
-- `.pt` 檔是已訓練的 model parameters/checkpoint。
-- checkpoint 存在時，推論與 recursive design 不需要重新訓練。
+| Checkpoint | 用途 | 由誰產生 |
+| --- | --- | --- |
+| `weights_CorePromoter_clean.pt` | baseline whole model；design 與保守度分析的預設 | frozen，已納入 Git |
+| `weights_CorePromoter_tss_arch.pt` | TSS/PAS architecture 階段 | `train_corepromoter_tss_pas.py` |
+| `weights_CorePromoter_tss_pas.pt` | TSS/PAS 最終 model，design 可選 | `train_corepromoter_tss_pas.py` |
+| `weights_UP / Sp16 / Sp17 / Sp18 / Dis / ITS.pt` | element energy models | 對應的 element notebook |
+| `weights_minus35.pt` / `weights_minus10.pt` | **未使用**，-35/-10 走 BPM | 舊版遺留 |
+
+- `.pt` 檔是已訓練的 model parameters/checkpoint；checkpoint 存在時，推論與 library design 不需要重新訓練。
 - 只有改變 model architecture、training data、training objective，或需要重新估計 weights 時才需重訓。
-- recursive design 的結果依賴所選 checkpoint、element models、輸入 tables 與 search configuration。
+- design 結果依賴所選 checkpoint、element models、輸入 tables 與 search configuration，這些都會記在 `run_config.json`。
 
 ## Reproducibility notes
 
-- 主要 scripts 使用固定 random seed `777`，但不同 PyTorch、CUDA 或硬體環境仍可能造成小幅差異。
-- 每次 run 應保留對應的 `training_config.json`、model metadata 與 output configuration。
+- 主要 scripts 使用固定 random seed `777`（gap assignment 另有 `gap_seed`），但不同 PyTorch、CUDA 或硬體環境仍可能造成小幅差異。
+- 每次 run 應保留對應的 `run_config.json` / `training_config.json` 與 model metadata；`run_config.json` 內含 core checkpoint 的檔案 signature（路徑、大小、mtime）。
 - 不要將大型 raw data、generated outputs、secrets 或暫存檔 commit 至 Git。
 - Jupyter notebooks 在 commit 前建議清除不必要的 cell outputs，以減少 repository 大小並避免留下本機路徑或大量執行結果。
 
@@ -249,7 +432,7 @@ RUN_MODE = "resume"  # 從既有 output directory 繼續
 git status
 git diff
 git add README.md
-git commit -m "Add project README"
+git commit -m "Update project README"
 git push
 ```
 
