@@ -59,7 +59,7 @@ MS2_Data_PyTorch/
 │   ├── Model_PL.ipynb                              # -35 / -10 的 BPM data flow
 │   ├── RE_site_scan.ipynb                          # restriction site scan
 │   ├── automated_promoter_library_design.py        # energy-bin design space + 自動搜尋
-│   ├── recursive_corepromoter_design.py            # 共用 model/資料 primitives（legacy 入口仍保留）
+│   ├── recursive_corepromoter_design.py            # 共用 model 定義與訓練資料組裝
 │   ├── train_corepromoter_tss_pas.py               # TSS/PAS 訓練 CLI
 │   ├── evaluate_corepromoter_tss_pas.py            # baseline vs TSS/PAS 評估 CLI
 │   ├── tss_pas_dataset.py                          # TSS/PAS 資料前處理 CLI
@@ -332,8 +332,6 @@ outputs/energy_bin_cache/            # scored pool 快取，依 PKL 與 weight �
 ```
 
 改動 bin 邊界不需要重算 energy，快取仍然有效；來源 PKL 或 element weights 更新後會自動重建。
-
-`recursive_corepromoter_design.py` 的 `run_recursive_design()` / `run_search_only()` 是舊版 percentile-band 搜尋入口，目前的 notebook 已不使用；該模組現在主要提供共用的 model 定義、資料組裝與 element model 載入。
 
 ## 6. Energy vs conservation 分析
 
