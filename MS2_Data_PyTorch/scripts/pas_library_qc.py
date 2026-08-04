@@ -36,13 +36,11 @@ Author: generated for the promoter-library-exp repository.
 """
 
 import argparse
-import itertools
 import json
-import math
 import os
 import sys
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import List, Tuple
 
 import numpy as np
 import pandas as pd

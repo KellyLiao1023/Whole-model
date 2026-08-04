@@ -34,7 +34,6 @@ CHANNEL_BY_SPACER = {sp: ch for ch, sp in SPACER_BY_CHANNEL.items()}
 ELEMENT_COLS = ["UP", "m35", "spacer", "m10", "DIS", "ITS"]
 
 HEADER_FILL = "1F4E79"
-SUBHEADER_FILL = "D9EAF7"
 
 
 @dataclass
