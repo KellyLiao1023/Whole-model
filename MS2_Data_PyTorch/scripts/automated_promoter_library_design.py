@@ -90,6 +90,16 @@ class DesignConfig:
     max_candidates_per_unit: int = 60
     max_abs_shift: int = 2
     max_shift_rate: float = 0.10
+    # Phase-switch trigger only, never an acceptance threshold: once the m10
+    # shifted rate is at or below this, the search moves on to the -35 correction
+    # phase instead of driving m10 all the way to max_shift_rate first. Both
+    # anchors are still validated at max_shift_rate, so the phase returns to m10
+    # after m35 passes to finish the job. Setting it equal to max_shift_rate gives
+    # back the original single-pass m10 -> m35 schedule apart from two edges: the
+    # gate is inclusive and ignores out-of-range variants, so a rate sitting
+    # exactly on the threshold, or one below it with |shift| > 2 still present,
+    # now enters the m35 phase where the old m10_validation_pass check did not.
+    m10_phase_exit_rate: float = 0.20
     scan_batch_size: int = 1024
     require_derived_spacer_in_database: bool = False
     # Per-element pooling boundary: how much of the observed min-max energy axis
@@ -108,6 +118,17 @@ class DesignConfig:
             raise ValueError(f"Missing consensus sequences: {sorted(missing)}")
         if self.n_energy_bins < 1:
             raise ValueError(f"n_energy_bins must be at least 1; received {self.n_energy_bins}")
+        if not 0.0 < self.m10_phase_exit_rate <= 1.0:
+            raise ValueError(
+                f"m10_phase_exit_rate must lie in (0, 1]; received {self.m10_phase_exit_rate}"
+            )
+        if self.m10_phase_exit_rate < self.max_shift_rate:
+            raise ValueError(
+                f"m10_phase_exit_rate ({self.m10_phase_exit_rate}) is stricter than "
+                f"max_shift_rate ({self.max_shift_rate}), so m10 could pass validation "
+                "while the phase gate still held the search in the m10 phase. Raise it "
+                "to at least max_shift_rate."
+            )
         self.default_energy_fraction_range = _validated_fraction_range(
             "default_energy_fraction_range", self.default_energy_fraction_range
         )
@@ -1140,34 +1161,60 @@ def summarize_validation(scan: pd.DataFrame, config: DesignConfig) -> dict:
     summary["global_validation_pass"] = bool(
         summary["m10_validation_pass"] and summary["m35_validation_pass"]
     )
+    # Phase gate, not a validation criterion: m10 only has to reach
+    # m10_phase_exit_rate before the search switches to the -35 correction phase.
+    # Deliberately ignores m10_out_of_range_count - the m10 objective already
+    # ranks out-of-range variants, and gating on it would keep the search in the
+    # m10 phase well past the rate the gate is written in.
+    summary["m10_phase_gate_pass"] = bool(
+        summary["m10_shifted_rate"] <= config.m10_phase_exit_rate
+    )
     summary["phase"] = (
         "done"
         if summary["global_validation_pass"]
+        # Still above the gate: keep pushing m10 down.
         else "m10"
-        if not summary["m10_validation_pass"]
+        if not summary["m10_phase_gate_pass"]
+        # Through the gate and m35 still failing: correct -35.
         else "m35"
+        if not summary["m35_validation_pass"]
+        # m35 passes but m10 has not reached max_shift_rate yet, so come back and
+        # finish m10. This return path is why the gate is not an acceptance line.
+        else "m10"
     )
     return summary
 
 
 def objective_for_phase(summary: dict, phase: str) -> tuple:
-    if phase in {"m10", "m35"}:
-        m10_shifted = int(summary["m10_shifted_count"])
-        m35_shifted = int(summary["m35_shifted_count"])
-        m10_out = int(summary["m10_out_of_range_count"])
-        m35_out = int(summary["m35_out_of_range_count"])
+    if phase not in {"m10", "m35"}:
+        return (0,)
+    m10_shifted = int(summary["m10_shifted_count"])
+    m35_shifted = int(summary["m35_shifted_count"])
+    out_total = int(summary["m10_out_of_range_count"]) + int(summary["m35_out_of_range_count"])
+    if phase == "m35":
+        # -35 correction phase. Ranking m35 first is what makes this phase about
+        # -35: a move that only lowers m10 while m35 grows no longer wins. m10
+        # stays second so a move that leaves m35 unchanged and lowers m10 is
+        # still an improvement and gets taken. m10 is separately forbidden from
+        # rising by the hard filter in AutomatedRedesigner.run().
         return (
-            # Global lexicographic priorities:
-            # 1. reduce -10 register shifts;
-            # 2. reduce -35 register shifts;
-            # 3. reduce the combined number of shifts beyond +/-2 bp.
-            m10_shifted,
             m35_shifted,
-            m10_out + m35_out,
-            int(summary["m10_max_abs_shift"]),
+            m10_shifted,
+            out_total,
             int(summary["m35_max_abs_shift"]),
+            int(summary["m10_max_abs_shift"]),
         )
-    return (0,)
+    # m10 phase lexicographic priorities:
+    # 1. reduce -10 register shifts;
+    # 2. reduce -35 register shifts;
+    # 3. reduce the combined number of shifts beyond +/-2 bp.
+    return (
+        m10_shifted,
+        m35_shifted,
+        out_total,
+        int(summary["m10_max_abs_shift"]),
+        int(summary["m35_max_abs_shift"]),
+    )
 
 
 def _dominant_shift(scan: pd.DataFrame, phase: str) -> tuple[int | None, pd.Series]:
@@ -1595,7 +1642,9 @@ class AutomatedRedesigner:
             )
             if self._verbose:
                 print(
-                    f"\n[Iteration {iteration}] phase={phase} | "
+                    f"\n[Iteration {iteration}] phase={phase} "
+                    f"(m10 gate<={self.config.m10_phase_exit_rate:.0%} "
+                    f"{'open' if summary['m10_phase_gate_pass'] else 'closed'}) | "
                     f"m10 shifted={summary['m10_shifted_rate']:.2%} "
                     f"out={summary['m10_out_of_range_count']} max_abs={summary['m10_max_abs_shift']} | "
                     f"m35 shifted={summary['m35_shifted_rate']:.2%} "
@@ -1697,7 +1746,17 @@ class AutomatedRedesigner:
 
             candidates = [p for p in evaluated_proposals if p.get("valid")]
             if phase == "m35":
-                candidates = [p for p in candidates if p["summary"]["m10_validation_pass"]]
+                # Hard constraint for the -35 correction phase: m10 may stay
+                # equal but must never get worse. Measured against the current
+                # library's shifted count rather than max_shift_rate, because
+                # this phase can be entered anywhere up to m10_phase_exit_rate
+                # and m10 must not drift back up from wherever it started.
+                current_m10_shifted = int(summary["m10_shifted_count"])
+                candidates = [
+                    p
+                    for p in candidates
+                    if int(p["summary"]["m10_shifted_count"]) <= current_m10_shifted
+                ]
             improving = [p for p in candidates if p["objective"] < current_objective]
             if improving:
                 best = min(improving, key=lambda p: p["objective"])
