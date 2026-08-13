@@ -79,7 +79,13 @@ class DesignUnitKey:
 
 @dataclass
 class DesignConfig:
-    consensus: dict[str, str]
+    # Locked sequences per element, never touched by the search. Either one string
+    # (the usual single consensus) or an ordered sequence of strings when an
+    # element needs several locked slots. They occupy the versions above the last
+    # mutable bin, weakest slot first: with N bins, entry i lands on v{N+1+i}, so
+    # ["TGGACTGATATATACAAAA", "TAAAAAATTTGGAAAATAG"] with 3 bins gives locked v4
+    # and v5. Normalised to a tuple per element by __post_init__.
+    consensus: dict[str, str | Iterable[str]]
     bg5: str = "T" * 13
     bg3: str = "A" * 13
     gap_length: int = 3
@@ -105,8 +111,9 @@ class DesignConfig:
     # Per-element pooling boundary: how much of the observed min-max energy axis
     # to bin, and into how many bins. Accepts (lower, upper) - which falls back to
     # n_energy_bins - or (lower, upper, n_bins). Every bin becomes one mutable
-    # design version, so an element with N bins contributes versions v1..vN plus a
-    # locked consensus at v{N+1}, and the library holds prod(N_e + 1) variants.
+    # design version, so an element with N bins and L locked sequences contributes
+    # versions v1..vN plus locked v{N+1}..v{N+L}, and the library holds
+    # prod(N_e + L_e) variants.
     # Example: {"UP": (0.0, 0.8, 4), "m35": (0.3, 0.9, 4)}.
     mutable_energy_fraction_ranges: dict[
         str, tuple[float, float] | tuple[float, float, int]
@@ -157,13 +164,22 @@ class DesignConfig:
                 f"v{SPACER_DERIVED_VERSION_IDX} is derived from v2 rather than sourced "
                 f"from a bin; received {spacer_bins}"
             )
+        normalized_consensus: dict[str, tuple[str, ...]] = {}
         for element, expected_len in ELEMENT_LENGTHS.items():
-            seq = normalize_dna(self.consensus[element])
-            if len(seq) != expected_len:
-                raise ValueError(
-                    f"Consensus {element} has length {len(seq)}; expected {expected_len}: {seq}"
-                )
-            self.consensus[element] = seq
+            entry = self.consensus[element]
+            raw = (entry,) if isinstance(entry, str) else tuple(entry)
+            if not raw:
+                raise ValueError(f"Consensus {element} must hold at least one locked sequence")
+            seqs = tuple(normalize_dna(seq) for seq in raw)
+            for seq in seqs:
+                if len(seq) != expected_len:
+                    raise ValueError(
+                        f"Consensus {element} has length {len(seq)}; expected {expected_len}: {seq}"
+                    )
+            if len(set(seqs)) != len(seqs):
+                raise ValueError(f"Consensus {element} repeats a locked sequence: {seqs}")
+            normalized_consensus[element] = seqs
+        self.consensus = normalized_consensus
         self.bg5 = normalize_dna(self.bg5)
         self.bg3 = normalize_dna(self.bg3)
 
@@ -183,12 +199,24 @@ class DesignConfig:
     def mutable_versions(self, element: str) -> tuple[str, ...]:
         return tuple(f"v{i}" for i in range(1, self.n_mutable_bins(element) + 1))
 
-    def locked_version(self, element: str) -> str:
-        """The locked consensus always occupies the slot after the last mutable bin."""
-        return f"v{self.n_mutable_bins(element) + 1}"
+    def n_locked(self, element: str) -> int:
+        """Number of locked sequences; each occupies one version above the bins."""
+        return len(self.consensus[element])
+
+    def locked_versions(self, element: str) -> tuple[str, ...]:
+        """Locked slots, weakest first, filling the versions after the last bin."""
+        first = self.n_mutable_bins(element) + 1
+        return tuple(f"v{i}" for i in range(first, first + self.n_locked(element)))
+
+    def locked_sequences(self, element: str) -> dict[str, str]:
+        """Locked version -> sequence, in slot order."""
+        return dict(zip(self.locked_versions(element), self.consensus[element]))
+
+    def is_locked(self, element: str, version: str) -> bool:
+        return version in self.locked_versions(element)
 
     def versions_for(self, element: str) -> tuple[str, ...]:
-        return self.mutable_versions(element) + (self.locked_version(element),)
+        return self.mutable_versions(element) + self.locked_versions(element)
 
     def n_variants(self) -> int:
         return math.prod(len(self.versions_for(element)) for element in ELEMENTS)
@@ -460,23 +488,33 @@ def assign_equal_width_bins(
     return out.sort_values(["energy_bin", "distance_to_bin_center", "sequence"]).reset_index(drop=True)
 
 
-def locked_energies(models: ElementModelBundle, config: DesignConfig) -> dict[str, float]:
-    """Energy of each element's locked consensus, on that element's own score axis.
+def locked_energies(
+    models: ElementModelBundle, config: DesignConfig
+) -> dict[str, dict[str, float]]:
+    """Per element, the energy of every locked sequence keyed by its version slot.
 
-    Kept under the historical name v5_energy where it is an output column; the
-    locked slot is v{n_bins+1} and is only literally v5 at four bins.
+    The locked slots are v{n_bins+1} onwards, so they are only literally v5 for an
+    element with four bins and one locked sequence.
     """
-    return {
-        element: float(models.score(element, [config.consensus[element]])[0])
-        for element in ELEMENTS
-    }
+    out: dict[str, dict[str, float]] = {}
+    for element in ELEMENTS:
+        versions = config.locked_versions(element)
+        scores = models.score(element, list(config.consensus[element]))
+        out[element] = {v: float(s) for v, s in zip(versions, scores)}
+    return out
+
+
+def binding_locked_energy(locked: dict[str, dict[str, float]], element: str) -> tuple[str, float]:
+    """The weakest locked slot: mutable candidates must stay below this one."""
+    version = min(locked[element], key=lambda v: locked[element][v])
+    return version, locked[element][version]
 
 
 def energy_bin_summary(pools: dict[str, pd.DataFrame], config: DesignConfig, models: ElementModelBundle) -> pd.DataFrame:
     locked = locked_energies(models, config)
     rows = []
     for element, pool in pools.items():
-        v5_energy = locked[element]
+        bind_version, bind_energy = binding_locked_energy(locked, element)
         n_bins, lower_fraction, upper_fraction, binning_mode = config.energy_bin_spec(element)
         fraction_edges = np.linspace(lower_fraction, upper_fraction, n_bins + 1)
         n_below_range = int((pool["energy_fraction"] < lower_fraction).sum())
@@ -493,10 +531,16 @@ def energy_bin_summary(pools: dict[str, pd.DataFrame], config: DesignConfig, mod
                     "energy_lower": float(sub["bin_lower"].iloc[0]) if len(sub) else np.nan,
                     "energy_upper": float(sub["bin_upper"].iloc[0]) if len(sub) else np.nan,
                     "n_sequences": int(len(sub)),
-                    "n_eligible_below_v5": int((sub["energy"] < v5_energy).sum()),
+                    "n_eligible_below_locked": int((sub["energy"] < bind_energy).sum()),
                     "n_excluded_below_range": n_below_range,
                     "n_excluded_above_range": n_above_range,
-                    "v5_energy": v5_energy,
+                    # The binding constraint is the weakest locked slot, which is
+                    # not necessarily the top one once an element locks several.
+                    "binding_locked_version": bind_version,
+                    "binding_locked_energy": bind_energy,
+                    "locked_energies": ";".join(
+                        f"{v}={e:.4f}" for v, e in locked[element].items()
+                    ),
                 }
             )
     return pd.DataFrame(rows)
@@ -513,24 +557,32 @@ class DesignSpace:
         self.models = models
         self.scored_pools = scored_pools
         self.unit_candidates: dict[DesignUnitKey, pd.DataFrame] = {}
-        self.v5_energy = locked_energies(models, config)
+        # element -> {locked version: energy}. Mutable candidates must stay below
+        # the weakest of them, which is what binding_locked_energy returns.
+        self.locked_energy = locked_energies(models, config)
         self._build_units()
+
+    def _binding_locked(self, element: str) -> tuple[str, float]:
+        return binding_locked_energy(self.locked_energy, element)
 
     def _eligible_bin(self, element: str, bin_id: int) -> pd.DataFrame:
         pool = self.scored_pools[element]
+        bind_version, bind_energy = self._binding_locked(element)
         sub = pool[
             (pool["energy_bin"] == bin_id)
-            & (pool["energy"] < self.v5_energy[element])
-            & (pool["sequence"] != self.config.consensus[element])
+            & (pool["energy"] < bind_energy)
+            & (~pool["sequence"].isin(self.config.consensus[element]))
         ].copy()
         if sub.empty:
             n_bins, lower, upper, _ = self.config.energy_bin_spec(element)
             raise ValueError(
                 f"No eligible sequences for {element} v{bin_id}: energy_bin={bin_id} "
                 f"of {n_bins} over fraction {lower:.2f}-{upper:.2f}, "
-                f"constraint=energy_below_{self.config.locked_version(element)} "
-                f"({self.v5_energy[element]:.4f}). Lower that element's upper_fraction "
-                f"in mutable_energy_fraction_ranges so the bin stays below the consensus."
+                f"constraint=energy_below_{bind_version} "
+                f"({bind_energy:.4f}, the weakest of "
+                f"{', '.join(self.config.locked_versions(element))}). Lower that "
+                f"element's upper_fraction in mutable_energy_fraction_ranges so the "
+                f"bin stays below the locked sequences."
             )
         return sub.sort_values(["distance_to_bin_center", "sequence"]).head(
             self.config.max_candidates_per_unit
@@ -564,11 +616,12 @@ class DesignSpace:
         base["energy_bin_v3"] = [
             self._energy_bin_for_value("spacer", value) for value in base["energy_v3"]
         ]
+        spacer_bind_version, spacer_bind_energy = self._binding_locked("spacer")
         base = base[
             np.isfinite(base["energy_v3"])
-            & (base["energy_v3"] < self.v5_energy["spacer"])
+            & (base["energy_v3"] < spacer_bind_energy)
             & (base["sequence_v2"] != base["sequence_v3"])
-            & (base["sequence_v3"] != self.config.consensus["spacer"])
+            & (~base["sequence_v3"].isin(self.config.consensus["spacer"]))
         ]
         if self.config.require_derived_spacer_in_database:
             base = base[base["v3_in_database"]]
@@ -576,7 +629,7 @@ class DesignSpace:
             raise ValueError(
                 f"No eligible Spacer_v2/v{SPACER_DERIVED_VERSION_IDX} pair: v2 must come "
                 f"from bin 2 and v{SPACER_DERIVED_VERSION_IDX}=v2[:-2]+'TG' must remain "
-                f"below Spacer_{self.config.locked_version('spacer')} energy."
+                f"below Spacer_{spacer_bind_version} energy ({spacer_bind_energy:.4f})."
             )
         self.unit_candidates[DesignUnitKey("spacer", "v2_v3_pair")] = base.head(
             self.config.max_candidates_per_unit
@@ -597,9 +650,10 @@ class DesignSpace:
             edges, _, _, _, frac_lo, frac_hi, n_bins = pool_bin_edges(scored)
             fraction_edges = np.linspace(frac_lo, frac_hi, n_bins + 1)
             bin_rows = scored[scored["energy_bin"] == source_bin]
+            bind_version, bind_energy = self._binding_locked(key.element)
             eligible = bin_rows[
-                (bin_rows["energy"] < self.v5_energy[key.element])
-                & (bin_rows["sequence"] != self.config.consensus[key.element])
+                (bin_rows["energy"] < bind_energy)
+                & (~bin_rows["sequence"].isin(self.config.consensus[key.element]))
             ]
             n_examined = min(len(eligible), self.config.max_candidates_per_unit)
             if key == DesignUnitKey("spacer", "v2_v3_pair"):
@@ -616,7 +670,9 @@ class DesignSpace:
                     "energy_lower": float(edges[source_bin - 1]),
                     "energy_upper": float(edges[source_bin]),
                     "n_sequences_in_bin": int(len(bin_rows)),
-                    "n_eligible_below_v5": int(len(eligible)),
+                    "n_eligible_below_locked": int(len(eligible)),
+                    "binding_locked_version": bind_version,
+                    "binding_locked_energy": bind_energy,
                     "n_source_candidates_examined": int(n_examined),
                     "n_candidates_in_search_pool": int(len(search_pool)),
                     "max_candidates_per_unit": int(self.config.max_candidates_per_unit),
@@ -715,22 +771,22 @@ class DesignSpace:
                         }
                     )
 
-            locked_version = self.config.locked_version(element)
-            rows.append(
-                {
-                    "element": element,
-                    "version": locked_version,
-                    "design_unit_id": f"locked_{locked_version}",
-                    "sequence": self.config.consensus[element],
-                    "energy": self.v5_energy[element],
-                    "energy_bin": self._energy_bin_for_value(element, self.v5_energy[element]),
-                    "selection_mode": "locked_consensus",
-                    "locked": True,
-                    "in_database": bool(
-                        self.config.consensus[element] in set(self.scored_pools[element]["sequence"])
-                    ),
-                }
-            )
+            observed = set(self.scored_pools[element]["sequence"])
+            for locked_version, sequence in self.config.locked_sequences(element).items():
+                energy = self.locked_energy[element][locked_version]
+                rows.append(
+                    {
+                        "element": element,
+                        "version": locked_version,
+                        "design_unit_id": f"locked_{locked_version}",
+                        "sequence": sequence,
+                        "energy": energy,
+                        "energy_bin": self._energy_bin_for_value(element, energy),
+                        "selection_mode": "locked_consensus",
+                        "locked": True,
+                        "in_database": bool(sequence in observed),
+                    }
+                )
         out = pd.DataFrame(rows)
         out["_version_idx"] = out["version"].map(version_index)
         return (
@@ -750,15 +806,23 @@ class DesignSpace:
             if sub["sequence"].duplicated().any():
                 dup = sub.loc[sub["sequence"].duplicated(False), ["version", "sequence"]]
                 raise ValueError(f"Duplicate {element} versions:\n{dup.to_string(index=False)}")
-            locked_version = self.config.locked_version(element)
-            locked = sub.loc[sub["version"] == locked_version].iloc[0]
-            if locked["sequence"] != self.config.consensus[element]:
-                raise ValueError(f"Locked consensus changed for {element}.")
-            weaker = sub[sub["version"] != locked_version]
-            if not (weaker["energy"] < float(locked["energy"])).all():
-                bad = weaker[weaker["energy"] >= float(locked["energy"])]
+            expected_locked = self.config.locked_sequences(element)
+            indexed = sub.set_index("version")
+            for locked_version, sequence in expected_locked.items():
+                if indexed.loc[locked_version, "sequence"] != sequence:
+                    raise ValueError(
+                        f"Locked {element} {locked_version} changed: expected {sequence}, "
+                        f"got {indexed.loc[locked_version, 'sequence']}."
+                    )
+            # Every mutable version must stay below every locked one, so the
+            # weakest locked slot is the binding comparison.
+            bind_version, bind_energy = self._binding_locked(element)
+            mutable = sub[~sub["version"].isin(expected_locked)]
+            if not (mutable["energy"] < bind_energy).all():
+                bad = mutable[mutable["energy"] >= bind_energy]
                 raise ValueError(
-                    f"{element} contains mutable energy >= {locked_version}:\n{bad}"
+                    f"{element} contains mutable energy >= {bind_version} "
+                    f"({bind_energy:.4f}):\n{bad}"
                 )
         derived_version = f"v{SPACER_DERIVED_VERSION_IDX}"
         spacer = selected[selected["element"] == "spacer"].set_index("version")
@@ -771,7 +835,7 @@ class DesignSpace:
         return tuple((key.element, key.unit_id, int(state[key])) for key in sorted(state, key=lambda x: x.label()))
 
     def unit_for_slot(self, element: str, version: str) -> DesignUnitKey | None:
-        if version == self.config.locked_version(element):
+        if self.config.is_locked(element, version):
             return None
         if element == "spacer" and version in {"v2", f"v{SPACER_DERIVED_VERSION_IDX}"}:
             return DesignUnitKey("spacer", "v2_v3_pair")
@@ -1297,7 +1361,7 @@ def diagnose_shift_drivers(
                 "dominant_shift": dominant,
                 "element": element,
                 "version": version,
-                "design_unit_id": unit.unit_id if unit else f"locked_{config.locked_version(element)}",
+                "design_unit_id": unit.unit_id if unit else f"locked_{version}",
                 "actionable": unit is not None,
                 "n_contexts": n_contexts,
                 "n_target_shift": n_target,
