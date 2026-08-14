@@ -1428,19 +1428,64 @@ class AutomatedRedesigner:
         self.live_progress_df: pd.DataFrame | None = None
         self._verbose: bool = False
 
+    def _changed_row_mask(
+        self,
+        variants: pd.DataFrame,
+        elements: pd.DataFrame,
+        changed_keys: Iterable[DesignUnitKey],
+    ) -> pd.Series:
+        """Rows of `variants` whose sequence differs when only `changed_keys` are
+        swapped in. `elements` supplies the (element, design_unit_id) -> version
+        mapping, which is structural and identical for every state (most units
+        are 1:1 with a version label; the spacer's v2_v3_pair unit covers both
+        v2 and v3), so any state's `selected_elements()` output works here.
+        """
+        mask = pd.Series(False, index=variants.index)
+        for key in changed_keys:
+            versions = elements.loc[
+                (elements["element"] == key.element) & (elements["design_unit_id"] == key.unit_id),
+                "version",
+            ]
+            mask |= variants[f"{key.element}_version"].isin(versions)
+        return mask
+
     def evaluate_state(
         self,
         state: dict[DesignUnitKey, int],
         annotate_element_energies: bool = True,
+        baseline_elements: pd.DataFrame | None = None,
+        baseline_scan: pd.DataFrame | None = None,
+        changed_keys: Iterable[DesignUnitKey] | None = None,
     ) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
         self.design_space.validate_state(state)
         elements = self.design_space.selected_elements(state)
         variants = assemble_library(elements, self.gap_assignment, self.config)
-        scan = self.scanner.scan(
-            variants,
-            annotate_element_energies=annotate_element_energies,
-            annotate_diagnostics=annotate_element_energies,
-        )
+
+        if baseline_scan is not None and changed_keys:
+            # assemble_library's row order/combination is fixed by gap_assignment
+            # and never depends on which sequence is selected, so baseline_scan
+            # (from an earlier state) lines up row-for-row with `variants` here.
+            # Only the rows touched by changed_keys need a fresh model pass.
+            mask = self._changed_row_mask(variants, baseline_elements, changed_keys)
+            scan = baseline_scan.copy()
+            if mask.any():
+                affected_index = variants.index[mask]
+                rescanned = self.scanner.scan(
+                    variants.loc[mask],
+                    annotate_element_energies=annotate_element_energies,
+                    annotate_diagnostics=annotate_element_energies,
+                )
+                # scan() internally does reset_index(drop=True), so the subset
+                # result comes back as 0..len(subset)-1; reattach the original
+                # row labels before writing back into `scan`.
+                rescanned.index = affected_index
+                scan.loc[affected_index, rescanned.columns] = rescanned
+        else:
+            scan = self.scanner.scan(
+                variants,
+                annotate_element_energies=annotate_element_energies,
+                annotate_diagnostics=annotate_element_energies,
+            )
         summary = summarize_validation(scan, self.config)
         return elements, scan, summary
 
@@ -1594,6 +1639,8 @@ class AutomatedRedesigner:
         changes: dict[DesignUnitKey, int],
         phase: str,
         proposal_type: str,
+        baseline_elements: pd.DataFrame | None = None,
+        baseline_scan: pd.DataFrame | None = None,
     ) -> dict | None:
         signature = self._proposal_signature(state, changes)
         if signature in self.evaluated:
@@ -1608,6 +1655,9 @@ class AutomatedRedesigner:
             elements, scan, summary = self.evaluate_state(
                 candidate_state,
                 annotate_element_energies=False,
+                baseline_elements=baseline_elements,
+                baseline_scan=baseline_scan,
+                changed_keys=list(changes),
             )
         except ValueError as exc:
             return {
@@ -1757,7 +1807,8 @@ class AutomatedRedesigner:
             for key in drivers:
                 for idx in self._next_indices(state, key):
                     proposal = self._evaluate_proposal(
-                        iteration, state, {key: idx}, phase, "single"
+                        iteration, state, {key: idx}, phase, "single",
+                        baseline_elements=elements, baseline_scan=scan,
                     )
                     if proposal is not None:
                         evaluated_proposals.append(proposal)
@@ -1773,7 +1824,8 @@ class AutomatedRedesigner:
                     continue
                 changes = {**left_changes, **right_changes}
                 proposal = self._evaluate_proposal(
-                    iteration, state, changes, phase, "double"
+                    iteration, state, changes, phase, "double",
+                    baseline_elements=elements, baseline_scan=scan,
                 )
                 if proposal is not None:
                     evaluated_proposals.append(proposal)
@@ -1827,9 +1879,15 @@ class AutomatedRedesigner:
                 state = best["state"]
                 # Re-run only the accepted state with element-energy
                 # annotations. Rejected proposals need register metrics only.
+                # `elements`/`scan` on the right-hand side are still the
+                # pre-acceptance values here, so they're the correct baseline
+                # for the rows that best["change_map"] actually touched.
                 elements, scan, summary = self.evaluate_state(
                     state,
                     annotate_element_energies=True,
+                    baseline_elements=elements,
+                    baseline_scan=scan,
+                    changed_keys=list(best["change_map"]),
                 )
                 stalled = 0
                 for row in reversed(proposal_rows):
