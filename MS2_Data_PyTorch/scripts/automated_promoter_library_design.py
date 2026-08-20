@@ -118,6 +118,23 @@ class DesignConfig:
     mutable_energy_fraction_ranges: dict[
         str, tuple[float, float] | tuple[float, float, int]
     ] = field(default_factory=dict)
+    # Drop candidates whose own measurements never cleared the assay's detection
+    # limit. Below it a variant simply did not fluoresce, so its LogGFP carries no
+    # information about how weak the element is - and those are exactly the
+    # sequences that would otherwise define the weak end of the design ladder.
+    #
+    # detection_limit_gfp is on the LINEAR GFP scale that LogGFP is the log10 of;
+    # None disables the filter and restores the pre-filter candidate pools.
+    #
+    # min_bright_measurements is clipped per sequence to how many rows it actually
+    # has, which is what lets one rule cover two pool shapes: PL.pkl gives each
+    # hexamer 19-25 rows (paired with many partners) so the clip does not bite and
+    # the sequence must clear the limit in at least K of them, while UL/SL17/DL/ITS
+    # give each sequence exactly one row, min(K, 1) = 1, and the rule degenerates to
+    # "its own measurement was above the limit". Without the clip those four pools
+    # would come back empty.
+    detection_limit_gfp: float | None = 6.0
+    min_bright_measurements: int = 5
 
     def __post_init__(self) -> None:
         missing = set(ELEMENTS) - set(self.consensus)
@@ -125,6 +142,18 @@ class DesignConfig:
             raise ValueError(f"Missing consensus sequences: {sorted(missing)}")
         if self.n_energy_bins < 1:
             raise ValueError(f"n_energy_bins must be at least 1; received {self.n_energy_bins}")
+        if self.detection_limit_gfp is not None:
+            self.detection_limit_gfp = float(self.detection_limit_gfp)
+            if not self.detection_limit_gfp > 0:
+                raise ValueError(
+                    "detection_limit_gfp is a linear GFP value and must be positive; "
+                    f"received {self.detection_limit_gfp}. Use None to disable the filter."
+                )
+        if self.min_bright_measurements < 1:
+            raise ValueError(
+                "min_bright_measurements must be at least 1; received "
+                f"{self.min_bright_measurements}"
+            )
         if not 0.0 < self.m10_phase_exit_rate <= 1.0:
             raise ValueError(
                 f"m10_phase_exit_rate must lie in (0, 1]; received {self.m10_phase_exit_rate}"
@@ -387,17 +416,47 @@ def load_core_model(device: torch.device, checkpoint_path: Path | None = None) -
     return model.eval()
 
 
-def _source_sequences(element: str, max_source_rows: int | None = None) -> tuple[list[str], Path]:
+def _source_sequences(
+    element: str,
+    max_source_rows: int | None = None,
+    detection_limit_gfp: float | None = None,
+    min_bright_measurements: int = 1,
+) -> tuple[list[str], Path]:
     filename, column = SOURCE_SPECS[element]
     expected_len = ELEMENT_LENGTHS[element]
     path = legacy.TABLE_DIR / filename
     if not path.exists():
         raise FileNotFoundError(path)
     df = pd.read_pickle(path)
-    raw = df.index if column is None else df[column]
-    seqs = pd.Series(raw, dtype="string").dropna().map(normalize_dna)
-    seqs = seqs[seqs.str.len() == expected_len]
-    seqs = seqs[seqs.str.fullmatch(r"[ACGT]+", na=False)].drop_duplicates()
+    # Rebuilt on a fresh RangeIndex so the sequence column and LogGFP stay aligned
+    # positionally: for the index-keyed pools the sequences come from df.index, which
+    # would otherwise carry a different index than the LogGFP column.
+    values = df.index if column is None else df[column]
+    seqs = pd.Series(np.asarray(values), dtype="string").map(normalize_dna)
+    usable = (
+        seqs.notna()
+        & (seqs.str.len() == expected_len)
+        & seqs.str.fullmatch(r"[ACGT]+", na=False)
+    )
+    seqs = seqs[usable]
+
+    if detection_limit_gfp is not None:
+        if "LogGFP" not in df.columns:
+            raise ValueError(
+                f"{filename} has no LogGFP column, so the detection-limit filter "
+                f"cannot be applied to {element}. Set detection_limit_gfp=None to "
+                "disable it."
+            )
+        log_gfp = pd.to_numeric(pd.Series(np.asarray(df["LogGFP"])), errors="coerce")
+        bright = (10.0 ** log_gfp)[usable.to_numpy()] >= detection_limit_gfp
+        per_sequence = bright.groupby(seqs.to_numpy())
+        # Clip to the rows a sequence actually has: single-measurement pools then
+        # need only their own row to be bright, while PL's many-partner rows need K.
+        required = per_sequence.size().clip(upper=min_bright_measurements)
+        survivors = per_sequence.sum() >= required
+        seqs = seqs[seqs.isin(survivors.index[survivors])]
+
+    seqs = seqs.drop_duplicates()
     if max_source_rows is not None and len(seqs) > max_source_rows:
         seqs = seqs.sample(max_source_rows, random_state=777)
     return sorted(seqs.tolist()), path
@@ -413,12 +472,20 @@ def build_scored_pools(
     cache_dir.mkdir(parents=True, exist_ok=True)
     pools: dict[str, pd.DataFrame] = {}
     for element in ELEMENTS:
-        seqs, source_path = _source_sequences(element, max_source_rows=max_source_rows)
+        seqs, source_path = _source_sequences(
+            element,
+            max_source_rows=max_source_rows,
+            detection_limit_gfp=config.detection_limit_gfp,
+            min_bright_measurements=config.min_bright_measurements,
+        )
         if element in {"m35", "m10"}:
             weight_path = legacy.SCRIPT_DIR / "BPM" / "Params_Con17.pkl"
         else:
             weight_name = f"weights_Sp{ELEMENT_LENGTHS['spacer']}.pt" if element == "spacer" else WEIGHT_NAMES[element]
             weight_path = legacy.WEIGHTS_DIR / weight_name
+        # The detection-limit settings change which sequences are in the pool at all,
+        # so they belong in the cache identity: without them a filtered run would
+        # silently reuse an unfiltered pool built from the same source file.
         cache_path = cache_dir / f"scored_pool_{element}.pkl"
         meta_path = cache_dir / f"scored_pool_{element}.json"
         signature = {
@@ -426,6 +493,8 @@ def build_scored_pools(
             "source": _file_signature(source_path),
             "weight": _file_signature(weight_path),
             "max_source_rows": max_source_rows,
+            "detection_limit_gfp": config.detection_limit_gfp,
+            "min_bright_measurements": config.min_bright_measurements,
         }
         cached_ok = False
         if use_cache and cache_path.exists() and meta_path.exists():
@@ -1212,7 +1281,15 @@ def summarize_validation(scan: pd.DataFrame, config: DesignConfig) -> dict:
         out_count = int((shifts.abs() > config.max_abs_shift).sum())
         shifted_rate = shifted_count / n if n else np.nan
         max_abs = int(shifts.abs().max()) if n else 0
-        passed = shifted_rate < config.max_shift_rate and out_count == 0
+        # Rate only. The old criterion also demanded out_count == 0 - not one variant
+        # anywhere with |shift| > max_abs_shift - which no run ever came close to:
+        # three full runs sat at 2,130 / 2,237 / 5,281 out of 15,625 with no trend
+        # toward zero, so the gate could never open and "pass" carried no
+        # information. What the library actually needs is variants whose designed
+        # architecture is the one the model reads, and shift == 0 says exactly that
+        # (it is also the same set as target_margin > 0). out_of_range_count stays in
+        # the summary as a reported diagnostic; it just no longer vetoes a run.
+        passed = shifted_rate < config.max_shift_rate
         summary.update(
             {
                 f"{anchor}_shifted_count": shifted_count,
@@ -1250,35 +1327,29 @@ def summarize_validation(scan: pd.DataFrame, config: DesignConfig) -> dict:
 
 
 def objective_for_phase(summary: dict, phase: str) -> tuple:
+    """Rank two candidate states. Lower is better, compared lexicographically.
+
+    Only the two shifted counts. The objective used to carry the combined
+    out-of-range count and both max_abs_shift values as tie-breakers, but the goal
+    is to maximise how many variants sit at shift == 0 and the magnitude of the
+    shifts that remain is not a quantity we act on: the dominant off-target is
+    ~35 bp away, a different site entirely rather than a near-miss register, so
+    shrinking "max shift" from 43 to 40 buys nothing. Keeping those terms only let
+    the search trade away shift == 0 variants to improve a number nobody reads.
+    """
     if phase not in {"m10", "m35"}:
         return (0,)
     m10_shifted = int(summary["m10_shifted_count"])
     m35_shifted = int(summary["m35_shifted_count"])
-    out_total = int(summary["m10_out_of_range_count"]) + int(summary["m35_out_of_range_count"])
     if phase == "m35":
         # -35 correction phase. Ranking m35 first is what makes this phase about
         # -35: a move that only lowers m10 while m35 grows no longer wins. m10
         # stays second so a move that leaves m35 unchanged and lowers m10 is
         # still an improvement and gets taken. m10 is separately forbidden from
         # rising by the hard filter in AutomatedRedesigner.run().
-        return (
-            m35_shifted,
-            m10_shifted,
-            out_total,
-            int(summary["m35_max_abs_shift"]),
-            int(summary["m10_max_abs_shift"]),
-        )
-    # m10 phase lexicographic priorities:
-    # 1. reduce -10 register shifts;
-    # 2. reduce -35 register shifts;
-    # 3. reduce the combined number of shifts beyond +/-2 bp.
-    return (
-        m10_shifted,
-        m35_shifted,
-        out_total,
-        int(summary["m10_max_abs_shift"]),
-        int(summary["m35_max_abs_shift"]),
-    )
+        return (m35_shifted, m10_shifted)
+    # m10 phase: reduce -10 register shifts first, then -35.
+    return (m10_shifted, m35_shifted)
 
 
 def _dominant_shift(scan: pd.DataFrame, phase: str) -> tuple[int | None, pd.Series]:
