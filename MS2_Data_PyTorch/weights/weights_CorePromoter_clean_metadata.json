@@ -2,8 +2,8 @@
   "seq_length": 80,
   "num_conds": 7,
   "seed": 777,
-  "trained_at": "2026-08-17T15:09:56",
+  "trained_at": "2026-08-20T13:52:34",
   "source": "MS2_Data_PyTorch/scripts/Model_CorePromoter_clean.ipynb",
-  "final_train_mse_log10": 0.150855153799057,
-  "final_test_mse_log10": 0.1538986712694168
+  "final_train_mse_log10": 0.15256360173225403,
+  "final_test_mse_log10": 0.15520693361759186
 }

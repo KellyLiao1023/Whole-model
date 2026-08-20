@@ -60,7 +60,17 @@ def dna_one_hot(seq: str, flatten: bool = False) -> np.ndarray:
         "C": [0, 1, 0, 0],
         "G": [0, 0, 1, 0],
         "T": [0, 0, 0, 1],
-        "-": [-1, -1, -1, -1],
+        # Padding means "no sequence here", so it must contribute nothing. The
+        # previous [-1,-1,-1,-1] made conv1's output at that position the NEGATED
+        # column sum, and nothing constrained that sum to stay positive: training
+        # could lower it and turn padding into a score bonus. Only UL() carries
+        # dashes, and UL is the one library whose variable region sits under conv1
+        # filter 1, so the model could cut UL's loss by reading padding instead of
+        # learning UP -- then those distorted weights scored designed sequences that
+        # contain no dashes at all. Measured before the fix: every one of the eight
+        # filters gave a positive contribution for an all-dash window.
+        # [0,0,0,0], not [0.25]*4: "absent", not "any base".
+        "-": [0, 0, 0, 0],
         "N": [0.25, 0.25, 0.25, 0.25],
     }
     one_hot = np.array([mapping.get(base, [0, 0, 0, 0]) for base in str(seq).upper()]).T
