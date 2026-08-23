@@ -38,6 +38,7 @@ Thumbs.db
 *.png
 *.svg
 *.gb
+*.keg
 
 # Generated outputs
 /outputs/
@@ -48,6 +49,12 @@ Thumbs.db
 /Promoter_library_design/energy_logos/
 /Promoter_library_design/contamination_check/
 *.log
+
+# Library release pipeline: regenerable run output, temp backup copies,
+# and an oversized duplicate of tables/Data_S1_20250826.xlsx
+/MS2_Data_PyTorch/scripts/library_release/outputs/
+/MS2_Data_PyTorch/scripts/library_release/_duplicates/
+/MS2_Data_PyTorch/scripts/library_release/data/native/Data_S1_20250826.xlsx
 
 # Backup copies and archives
 /MS2_Data_PyTorch - 複製/

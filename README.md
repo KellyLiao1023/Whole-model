@@ -32,7 +32,7 @@ Model_CorePromoter_TSS_pretrain.ipynb 或 train_corepromoter_tss_pas.py
                         │
 Element models + energy bins ───┤
                                 ▼
-        Model_CorePromoter_recursive_design.ipynb
+        library_release/01_recursive_design.ipynb
         (automated_promoter_library_design.py)
                                 │
                                 ▼
@@ -52,21 +52,20 @@ MS2_Data_PyTorch/
 │   ├── Model_CorePromoter_clean.ipynb              # baseline whole model 訓練 + filter logo
 │   ├── Model_CorePromoter_v0.ipynb                 # clean 版之前的完整原始 notebook（保留參考）
 │   ├── Model_CorePromoter_TSS_pretrain.ipynb       # TSS/PAS 三階段訓練
-│   ├── Model_CorePromoter_recursive_design.ipynb   # automated library redesign（主要設計入口）
 │   ├── Model_CorePromoter_energy_vs_conservation.ipynb  # energy vs 天然保守度分析
 │   ├── Model_UP_v0.ipynb / Model_Sp17.ipynb / Model_Dis.ipynb / Model_ITS.ipynb
 │   │                                               # element scoring models
 │   ├── Model_PL.ipynb                              # -35 / -10 的 BPM data flow
-│   ├── RE_site_scan.ipynb                          # restriction site scan
 │   ├── automated_promoter_library_design.py        # energy-bin design space + 自動搜尋
 │   ├── recursive_corepromoter_design.py            # 共用 model 定義與訓練資料組裝
 │   ├── train_corepromoter_tss_pas.py               # TSS/PAS 訓練 CLI
 │   ├── evaluate_corepromoter_tss_pas.py            # baseline vs TSS/PAS 評估 CLI
 │   ├── tss_pas_dataset.py                          # TSS/PAS 資料前處理 CLI
 │   ├── anchor_pull_replacement.py                  # 單一 element 的替換候選建議
-│   ├── pas_library_qc.py                           # PAS/BPM library QC CLI
+│   ├── pas_library_qc.py                           # PAS/BPM library QC CLI（不在 library release pipeline 內）
 │   ├── util.py                                     # PFM / logo / 繪圖小工具
-│   └── BPM/                                        # BPM.py、util.py、Params_Con17.pkl
+│   ├── BPM/                                        # BPM.py、util.py、Params_Con17.pkl
+│   └── library_release/                            # 文庫產出 pipeline 01-07，見該目錄 README
 ├── tables/      # 本機 experimental data，除少數小檔外不納入 Git
 ├── genomes/     # 參考基因體 GenBank 檔（*.gb，不納入 Git）
 ├── weights/     # 已訓練的 checkpoint 與 metadata（納入 Git）
@@ -115,7 +114,8 @@ ITS.pkl     # ITS
 - TSS/PAS 訓練與保守度分析：`MS2_Data_PyTorch/tables/Data_S1_20250826.xlsx`
 - 保守度分析的背景組成：`MS2_Data_PyTorch/genomes/NC_000913.2.gb`（E. coli K-12 MG1655）；`*.gb` 被 gitignore，需自行下載
 - `anchor_pull_replacement.py`：`tables/assembled_nn_scan_clean.csv`，以及 repository 之外的 `Promoter_library_design/candidates_output`、`variants_output`
-- `RE_site_scan.ipynb`：預設讀 `tables/assembled_scan.csv`
+- `library_release/07_re_scan.ipynb`：讀 `library_release/outputs/06_whole_sequence.csv`
+  （舊的 `tables/assembled_scan.csv` 是 93 nt 的過期 BG5/BG3 版本，已不再使用）
 - repository 內只保留兩份小型 shared tables：`elements_shared.csv`、`phage_promoters.csv`
 
 > Experimental tables 含本機資料，Git clone 後不會自動取得。執行前請先確認檔名、欄位與路徑符合 scripts 的預期。
@@ -220,7 +220,7 @@ outputs/corepromoter_tss_pas_evaluation/<timestamp>/
 主要入口：
 
 ```text
-MS2_Data_PyTorch/scripts/Model_CorePromoter_recursive_design.ipynb
+MS2_Data_PyTorch/scripts/library_release/01_recursive_design.ipynb
    └── 實作在 automated_promoter_library_design.py
 ```
 
@@ -375,12 +375,14 @@ MS2_Data_PyTorch/figures/EnergyVsLog2Enrichment_perbase_byElement_Ecoli_sp17.{pn
 ### Restriction site scan
 
 ```text
-MS2_Data_PyTorch/scripts/RE_site_scan.ipynb
+MS2_Data_PyTorch/scripts/library_release/07_re_scan.ipynb
 ```
 
-對整條 `Sequence` 掃 19 種常用 restriction site（非回文的 Eco31I 連反股一起掃），輸出到 `tables/RE_scan_outputs/`：`ALL_files_RE_scan.csv`、`ALL_files_RE_summary.csv`、`common_absent_RE_sites.csv`。注意 BG5/BG3 固定背景內的切位會出現在每一條序列。
+對整條 `full_sequence` 掃 19 種常用 restriction site（非回文的 Eco31I 連反股一起掃）。利用 06 記錄的 segment offset，把每個切位歸屬到 BG5 / promoter / RE1 / RE2 / barcode / BG3，只有落在固定側翼之外的才算 unexpected。輸出 `outputs/07_re_scan_report.csv`。
 
-### PAS / BPM library QC
+### PAS / BPM library QC（獨立工具，不在 library release pipeline 內）
+
+> Register 檢查在 pipeline 內由 `automated_promoter_library_design.CorePromoterScanner.scan()` 負責，用的是設計時最佳化的那個 CorePromoter 模型。此處的 BPM 版本是獨立的第二實作，保留作臨時交叉檢查用。
 
 ```powershell
 python MS2_Data_PyTorch/scripts/pas_library_qc.py --variant_table <variants.csv> --output_dir <out>
