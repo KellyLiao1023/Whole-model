@@ -1,57 +1,49 @@
 ﻿KEG_file,Code,Label,Function,Entry_count,Unique_gene_count
-atu00001.keg,09122,TL,Translation,148,148
-atu00001.keg,09104,NM,Nucleotide metabolism,112,102
-atu00001.keg,09105,AM,Amino acid metabolism,353,251
-atu00001.keg,09132,SR,Signal transduction,154,154
-bcj00001.keg,09122,TL,Translation,182,182
-bcj00001.keg,09104,NM,Nucleotide metabolism,113,105
-bcj00001.keg,09105,AM,Amino acid metabolism,517,380
-bcj00001.keg,09132,SR,Signal transduction,199,199
-bsu00001.keg,09122,TL,Translation,202,202
-bsu00001.keg,09104,NM,Nucleotide metabolism,95,87
-bsu00001.keg,09105,AM,Amino acid metabolism,311,208
-bsu00001.keg,09132,SR,Signal transduction,131,131
-bth00001.keg,09122,TL,Translation,161,161
-bth00001.keg,09104,NM,Nucleotide metabolism,75,69
-bth00001.keg,09105,AM,Amino acid metabolism,205,153
-bth00001.keg,09132,SR,Signal transduction,75,75
-eco00001.keg,09122,TL,Translation,191,191
-eco00001.keg,09104,NM,Nucleotide metabolism,137,122
-eco00001.keg,09105,AM,Amino acid metabolism,295,220
-eco00001.keg,09132,SR,Signal transduction,188,188
-hpy00001.keg,09122,TL,Translation,123,123
-hpy00001.keg,09104,NM,Nucleotide metabolism,46,41
-hpy00001.keg,09105,AM,Amino acid metabolism,106,76
-hpy00001.keg,09132,SR,Signal transduction,34,34
-msm00001.keg,09122,TL,Translation,146,146
-msm00001.keg,09104,NM,Nucleotide metabolism,109,100
-msm00001.keg,09105,AM,Amino acid metabolism,503,328
-msm00001.keg,09132,SR,Signal transduction,100,100
-mtu00001.keg,09122,TL,Translation,132,132
-mtu00001.keg,09104,NM,Nucleotide metabolism,78,71
-mtu00001.keg,09105,AM,Amino acid metabolism,314,203
-mtu00001.keg,09132,SR,Signal transduction,61,61
-pau00001.keg,09122,TL,Translation,156,156
-pau00001.keg,09104,NM,Nucleotide metabolism,103,94
-pau00001.keg,09105,AM,Amino acid metabolism,446,328
-pau00001.keg,09132,SR,Signal transduction,265,265
-sam00001.keg,09122,TL,Translation,161,161
-sam00001.keg,09104,NM,Nucleotide metabolism,71,65
-sam00001.keg,09105,AM,Amino acid metabolism,201,144
-sam00001.keg,09132,SR,Signal transduction,78,78
-sey00001.keg,09122,TL,Translation,191,191
-sey00001.keg,09104,NM,Nucleotide metabolism,119,104
-sey00001.keg,09105,AM,Amino acid metabolism,283,213
-sey00001.keg,09132,SR,Signal transduction,215,215
-syu00001.keg,09122,TL,Translation,128,128
-syu00001.keg,09104,NM,Nucleotide metabolism,58,56
-syu00001.keg,09105,AM,Amino acid metabolism,173,125
-syu00001.keg,09132,SR,Signal transduction,43,43
-unsure\pae00001.keg,09122,TL,Translation,161,161
-unsure\pae00001.keg,09104,NM,Nucleotide metabolism,102,93
-unsure\pae00001.keg,09105,AM,Amino acid metabolism,443,324
-unsure\pae00001.keg,09132,SR,Signal transduction,258,258
-unsure\syf00001.keg,09122,TL,Translation,130,130
-unsure\syf00001.keg,09104,NM,Nucleotide metabolism,61,58
-unsure\syf00001.keg,09105,AM,Amino acid metabolism,173,125
-unsure\syf00001.keg,09132,SR,Signal transduction,41,41
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\atu00001.keg,09122,TL,Translation,148,148
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\atu00001.keg,09104,NM,Nucleotide metabolism,112,102
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\atu00001.keg,09105,AM,Amino acid metabolism,353,251
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\atu00001.keg,09132,SR,Signal transduction,154,154
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\bcj00001.keg,09122,TL,Translation,182,182
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\bcj00001.keg,09104,NM,Nucleotide metabolism,113,105
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\bcj00001.keg,09105,AM,Amino acid metabolism,517,380
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\bcj00001.keg,09132,SR,Signal transduction,199,199
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\bsu00001.keg,09122,TL,Translation,202,202
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\bsu00001.keg,09104,NM,Nucleotide metabolism,95,87
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\bsu00001.keg,09105,AM,Amino acid metabolism,311,208
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\bsu00001.keg,09132,SR,Signal transduction,131,131
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\bth00001.keg,09122,TL,Translation,161,161
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\bth00001.keg,09104,NM,Nucleotide metabolism,75,69
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\bth00001.keg,09105,AM,Amino acid metabolism,205,153
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\bth00001.keg,09132,SR,Signal transduction,75,75
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\eco00001.keg,09122,TL,Translation,191,191
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\eco00001.keg,09104,NM,Nucleotide metabolism,137,122
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\eco00001.keg,09105,AM,Amino acid metabolism,295,220
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\eco00001.keg,09132,SR,Signal transduction,188,188
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\hpy00001.keg,09122,TL,Translation,123,123
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\hpy00001.keg,09104,NM,Nucleotide metabolism,46,41
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\hpy00001.keg,09105,AM,Amino acid metabolism,106,76
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\hpy00001.keg,09132,SR,Signal transduction,34,34
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\msm00001.keg,09122,TL,Translation,146,146
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\msm00001.keg,09104,NM,Nucleotide metabolism,109,100
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\msm00001.keg,09105,AM,Amino acid metabolism,503,328
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\msm00001.keg,09132,SR,Signal transduction,100,100
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\mtu00001.keg,09122,TL,Translation,132,132
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\mtu00001.keg,09104,NM,Nucleotide metabolism,78,71
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\mtu00001.keg,09105,AM,Amino acid metabolism,314,203
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\mtu00001.keg,09132,SR,Signal transduction,61,61
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\pau00001.keg,09122,TL,Translation,156,156
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\pau00001.keg,09104,NM,Nucleotide metabolism,103,94
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\pau00001.keg,09105,AM,Amino acid metabolism,446,328
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\pau00001.keg,09132,SR,Signal transduction,265,265
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\sam00001.keg,09122,TL,Translation,161,161
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\sam00001.keg,09104,NM,Nucleotide metabolism,71,65
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\sam00001.keg,09105,AM,Amino acid metabolism,201,144
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\sam00001.keg,09132,SR,Signal transduction,78,78
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\sey00001.keg,09122,TL,Translation,191,191
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\sey00001.keg,09104,NM,Nucleotide metabolism,119,104
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\sey00001.keg,09105,AM,Amino acid metabolism,283,213
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\sey00001.keg,09132,SR,Signal transduction,215,215
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\syu00001.keg,09122,TL,Translation,128,128
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\syu00001.keg,09104,NM,Nucleotide metabolism,58,56
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\syu00001.keg,09105,AM,Amino acid metabolism,173,125
+C:\project\Whole-model\MS2_Data_PyTorch\scripts\library_release\data\native\syu00001.keg,09132,SR,Signal transduction,43,43

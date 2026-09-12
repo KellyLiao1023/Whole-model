@@ -19,9 +19,9 @@ one place, `06_assemble.ipynb`, and nowhere else.
 | # | Notebook | Reads | Writes |
 |---|---|---|---|
 | 01 | `01_recursive_design.ipynb` | `tables/*.pkl`, `weights/*.pt`, `BPM/Params_Con17.pkl` | `outputs/01_final_design.csv` |
-| 02 | `02_native_selection.ipynb` | `data/native/Data_S1_20250826.xlsx`, `data/native/*.keg` | `outputs/02_native_promoters.csv` |
-| 03 | `03_phage_selection_scan.ipynb` | `data/phage/*.gb` | `outputs/03_phage_promoters.csv` |
-| 04 | `04_phage_selection_curated.ipynb` | `data/phage/*.gb`, `data/phage/T5 promoter.xlsx` | `outputs/04_phage_promoters.csv` |
+| 02 | `02_native_selection.ipynb` | `data/native/Data_S1_20250826.xlsx`, `data/native/*.keg` | `data/native/native_promoters_12species.xlsx`, `data/native/kegg_4cat_counts.csv`, `outputs/02_native_promoters.csv` |
+| 03 | `03_phage_selection_scan.ipynb` | `data/phage/*.gb` | `outputs/03_phage_scan_candidates_raw.csv`, `outputs/03_phage_promoters.csv` |
+| 04 | `04_phage_selection_curated.ipynb` | `data/phage/*.gb`, `data/phage/T5 promoter.xlsx` | `outputs/04_phage_curated_raw.csv`, `outputs/04_phage_promoters.csv` |
 | 05 | `05_barcode_generation.ipynb` | — | `outputs/05_barcodes.csv` |
 | 06 | `06_assemble.ipynb` | `outputs/01`–`05` | `outputs/06_whole_sequence.csv` |
 | 07 | `07_re_scan.ipynb` | `outputs/06_whole_sequence.csv` | `outputs/07_re_scan_report.csv` |
@@ -35,11 +35,21 @@ redoing the expensive work above it.
 
 ## Status
 
-Only 01 and 02 have been run end-to-end so far (`outputs/01_final_design.csv`,
-`outputs/02_native_promoters.csv` exist). 03–07 are written but not yet
-verified against real data — do not treat this pipeline as validated until
-`outputs/07_re_scan_report.csv` exists and `qc_pass` has been checked on the
-full concatenated table.
+All seven notebooks have now been run end-to-end and every output in the table
+above exists, `outputs/07_re_scan_report.csv` included.
+
+01 is the exception worth knowing about: its search (Batch 6) was not re-run.
+Batch 8 re-exports from the design run recorded in the `design_run` column of
+`outputs/01_final_design.csv`. It now prefers this notebook's own `OUT_DIR` and
+only falls back to `latest_design_run()` — printing a warning — when the current
+run produced no `final_scan_15625.csv`. Before that fix an interrupted search
+would leave a newer directory with no `final_scan`, and Batch 8 silently exported
+an older, unrelated design.
+
+What is *not* validated is the biology: `07_re_scan_report.csv` shows a large
+number of restriction sites inside the promoters themselves (see
+[Restriction sites](#restriction-sites) below). Those are a property of the
+sequences, not a pipeline bug, and they still need a decision.
 
 ## Shared schema
 
@@ -77,6 +87,37 @@ by design; anything in the promoter or barcode, or spanning a junction, is
 reported as `sites_unexpected` with a `unexpected_detail` string like
 `Eco31I@129(RE2+barcode)`.
 
+RE2 and the first nucleotides of BG3 are also duplicated in 05, as
+`CONTEXT_PREFIX` / `CONTEXT_SUFFIX`, because a barcode has to be screened in the
+context it will actually sit in — see the next section. 06 reads the context 05
+recorded in `05_barcodes.csv` and raises if it no longer matches the flanks
+defined here, so the two cannot drift apart silently.
+
+## Restriction sites
+
+05 screens each barcode inside the context it will actually sit in,
+`RE1 + RE2 | barcode | BG3`, and counts only hits that **overlap the barcode** —
+the flanks carry sites by design (`CONTEXT_PREFIX` ends in XbaI because RE2 *is*
+XbaI), so a plain substring test on the flanked string rejects every candidate.
+It is the same expected/unexpected split 07 applies to the assembled construct,
+and the two agree row for row.
+
+Screening the bare 15-mer instead let 1,546 sites through at the two barcode
+junctions, across 1,532 constructs — 125 of them Eco31I (BsaI), the Golden Gate
+enzyme built into BG5/BG3, which would have broken assembly. After the change
+`07_re_scan_report.csv` reports **zero** sites touching a barcode, and the clean
+rate goes from 58.1% to 61.0% (20,727 / 33,999).
+
+What remains is entirely promoter-related: 16,592 sites inside promoters plus 384
+straddling a promoter boundary. None of the 19 enzymes in `_paths.RE_SITES` is
+free of sites across the whole library, so swapping RE1/RE2 for a different pair
+does not help. Native and phage promoters carry whatever the real sequence
+carries and cannot be edited; the designed set is the one place this is
+controllable, and its element pools are currently not RE-filtered — which is why
+`assembled` has the *worst* clean rate of the three sources (40.8%, against 82.6%
+native and 76.2% phage). Read `sites_unexpected` and `unexpected_detail` in
+`outputs/07_re_scan_report.csv` per source before ordering.
+
 ## Layout
 
 ```
@@ -112,5 +153,25 @@ Python libraries (`automated_promoter_library_design.py`,
   restriction sites. If barcode/RE placement turns out to perturb the
   -35/-10 register, this pipeline would not currently catch it.
 - `data/native/native_promoters_12species.xlsx` and `data/native/kegg_4cat_counts.csv`
-  are leftover from copying the audit snapshot in; 02 does not read either one
-  (it only reads `Data_S1_20250826.xlsx` and the `*.keg` files). Safe to delete.
+  are **written by 02, not leftovers**. 02 cell 6 writes the counts CSV, cell 12
+  writes the workbook, and the standardising cell reads that workbook back to
+  produce `outputs/02_native_promoters.csv`. Deleting the workbook breaks 02's
+  last cell. (An earlier revision of this file said they were safe to delete.
+  They are not.)
+- 07 writes one file, `outputs/07_re_scan_report.csv`. The older
+  `outputs/re_scan_detail/` directory came from a whole-file scanner that has
+  been removed — it counted the by-design BG5/BG3/RE1/RE2 sites into its `clean`
+  column, so that column was always 0%. Those files are stale and can go.
+- Re-running 05 replaces every barcode, and 06 pairs barcodes to candidates by
+  position in `candidate_id` order, so the whole barcode↔candidate mapping
+  changes with it. Do not re-run 05 once anything has been ordered or sequenced
+  against the current mapping.
+- Two entries in `data/phage/T5 promoter.xlsx` have feature lengths that are not
+  75 bp (`P-D/E 20` is 327, `P-F 30` is 6), so the +1 inferred from their
+  upstream edge cannot be trusted. 04 marks them `location_ok=False`, which
+  forces `qc_pass=False`, and 06 leaves them out. To use them, confirm the real
+  +1 against the source literature first.
+- 03 applies `MIN_LOGEXP` inside the per-genome loop. Scanning all 17 genomes on
+  both strands at five spacer lengths is 13.2 M windows; keeping them all as rows
+  before filtering cost ~8 GB and the concat doubled it. Do not move the filter
+  back out of `scan_record()`.
