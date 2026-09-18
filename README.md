@@ -19,7 +19,7 @@ Expression libraries (PL / SL16 / SL17 / SL18 / DL / UL / ITS)
         ├──► Model_CorePromoter_clean.ipynb ──► weights_CorePromoter_clean.pt
         │        (whole model 訓練與 filter logo)        [frozen baseline]
         │
-        └──► Model_UP_v0 / Model_PL / Model_Sp17 /
+        └──► Model_UP / Model_PL / Model_Sp16-18 /
              Model_Dis / Model_ITS.ipynb  ──────────────► weights_UP / Sp16-18 /
                                                           Dis / ITS.pt、BPM 參數
 TSS/PAS workbook (Data_S1)
@@ -53,7 +53,8 @@ MS2_Data_PyTorch/
 │   ├── Model_CorePromoter_v0.ipynb                 # clean 版之前的完整原始 notebook（保留參考）
 │   ├── Model_CorePromoter_TSS_pretrain.ipynb       # TSS/PAS 三階段訓練
 │   ├── Model_CorePromoter_energy_vs_conservation.ipynb  # energy vs 天然保守度分析
-│   ├── Model_UP_v0.ipynb / Model_Sp17.ipynb / Model_Dis.ipynb / Model_ITS.ipynb
+│   ├── Model_UP.ipynb / Model_Sp16.ipynb / Model_Sp17.ipynb / Model_Sp18.ipynb
+│   │   / Model_Dis.ipynb / Model_ITS.ipynb
 │   │                                               # element scoring models
 │   ├── Model_PL.ipynb                              # -35 / -10 的 BPM data flow
 │   ├── automated_promoter_library_design.py        # energy-bin design space + 自動搜尋
@@ -115,7 +116,7 @@ ITS.pkl     # ITS
 - 保守度分析的背景組成：`MS2_Data_PyTorch/genomes/NC_000913.2.gb`（E. coli K-12 MG1655）；`*.gb` 被 gitignore，需自行下載
 - `anchor_pull_replacement.py`：`tables/assembled_nn_scan_clean.csv`，以及 repository 之外的 `Promoter_library_design/candidates_output`、`variants_output`
 - `library_release/07_re_scan.ipynb`：讀 `library_release/outputs/06_whole_sequence.csv`
-  （舊的 `tables/assembled_scan.csv` 是 93 nt 的過期 BG5/BG3 版本，已不再使用）
+  （舊的 `tables/assembled_scan.csv` 是 93 nt 的過期 BG5/BG3 版本，已移到 `_archive_20260918/`）
 - repository 內只保留兩份小型 shared tables：`elements_shared.csv`、`phage_promoters.csv`
 
 > Experimental tables 含本機資料，Git clone 後不會自動取得。執行前請先確認檔名、欄位與路徑符合 scripts 的預期。
@@ -138,13 +139,13 @@ MS2_Data_PyTorch/scripts/Model_CorePromoter_clean.ipynb
 
 | Notebook | 來源 table | 產出 |
 | --- | --- | --- |
-| `Model_UP_v0.ipynb` | `UL.pkl` | `weights_UP.pt` |
-| `Model_Sp17.ipynb` | `SL16/17/18.pkl` | `weights_Sp16.pt` / `Sp17` / `Sp18` |
+| `Model_UP.ipynb` | `UL.pkl` | `weights_UP.pt` |
+| `Model_Sp16.ipynb` / `Model_Sp17.ipynb` / `Model_Sp18.ipynb` | `SL16.pkl` / `SL17.pkl` / `SL18.pkl` | `weights_Sp16.pt` / `Sp17` / `Sp18`。只有 Sp17 參與打分，但三個檔缺一不可，見 `weights/README.md` |
 | `Model_Dis.ipynb` | `DL.pkl` | `weights_Dis.pt` |
 | `Model_ITS.ipynb` | `ITS.pkl` | `weights_ITS.pt` |
 | `Model_PL.ipynb` | `PL.pkl` | BPM 參數（`BPM/Params_Con17.pkl`） |
 
-**-35 / -10 使用 BPM，不使用 NN weights。** `weights_minus35.pt` 與 `weights_minus10.pt` 雖然存在 `weights/`，但 pipeline 沒有任何 code 載入它們（`ElementModelBundle._load_all` 明確跳過），而且與 BPM 排序嚴重不一致（Spearman ρ = 0.37 / −0.22）。design 流程一律以 `-BPM dG` 作為 -35/-10 的 higher-is-stronger score。
+**-35 / -10 使用 BPM，不使用 NN weights。** `weights_minus35_unused.pt` 與 `weights_minus10_unused.pt` 雖然存在 `weights/`，但 pipeline 沒有任何 code 載入它們（`ElementModelBundle._load_all` 明確跳過），而且與 BPM 排序嚴重不一致（Spearman ρ = 0.37 / −0.22）。design 流程一律以 `-BPM dG` 作為 -35/-10 的 higher-is-stronger score。
 
 所有 element score 都是「higher = stronger」，但**不同 element 的分數不可互相比較**。
 
@@ -257,16 +258,18 @@ energy bin 邊界逐 element 指定為 `(lower_fraction, upper_fraction, n_bins)
 
 ```python
 ENERGY_BIN_RANGES = {
-    "UP":     (0.0, 0.8, 4),
-    "m35":    (0.3, 0.9, 4),
-    "spacer": (0.0, 0.8, 4),
-    "m10":    (0.3, 0.9, 4),
-    "DIS":    (0.0, 0.8, 4),
-    "ITS":    (0.0, 0.8, 4),
+    # UP 只切 3 個 bin：它的 locked consensus 有兩條，佔掉 v4 與 v5，
+    # 所以它仍然是 5 個版本，整個文庫維持 5^6 = 15,625。
+    "UP":     (0.0, 0.7, 3),
+    "m35":    (0.2, 1.0, 4),
+    "spacer": (0.0, 0.9, 4),
+    "m10":    (0.0, 1.0, 4),
+    "DIS":    (0.0, 1.0, 4),
+    "ITS":    (0.0, 1.0, 4),
 }
 ```
 
-- N 個 bin → mutable `v1..vN` + locked consensus `v{N+1}`，一個 design state 組成 `∏(N_e + 1)` 個 variants；六個元素都是 4 個 bin 時為 `5^6 = 15,625`。
+- N 個 bin → mutable `v1..vN` + locked consensus 填滿其上的版本，一個 design state 組成 `∏(版本數)` 個 variants。目前六個元素都是 5 個版本，所以是 `5^6 = 15,625`：m35 / spacer / m10 / DIS / ITS 各 4 個 bin 加 1 個 locked，UP 則是 3 個 bin 加 2 條 locked consensus。
 - spacer 至少需要 3 個 bin：`Spacer_v3 = Spacer_v2[:-2] + "TG"` 是衍生的，不取自 bin 3，v2/v3 是同一個 coupled design unit。
 - 某個 bin 的上界超過 locked consensus 時該 bin 沒有 eligible sequence，`DesignSpace` 會直接報錯而不是跨 bin 補候選 —— 這時回 Batch 0 調低 `upper_fraction`。bin summary 的 `n_eligible_below_v5` 就是扣掉這個限制後真正可用的候選數。
 
@@ -274,12 +277,12 @@ search 參數：
 
 ```python
 SEARCH_SETTINGS = {
-    "max_iterations": 100,        # 每次 new/resume 執行的「額外」輪數，不是累積上限
+    "max_iterations": 50,         # 每次 new/resume 執行的「額外」輪數，不是累積上限
     "n_driver_units": 3,
     "probe_candidates_per_unit": 2,
     "pair_beam_width": 6,
     "max_pair_evaluations": 8,
-    "max_stalled_iterations": 30,
+    "max_stalled_iterations": 60,
 }
 ```
 
@@ -411,7 +414,7 @@ result = suggest_replacements(
 | `weights_CorePromoter_tss_arch.pt` | TSS/PAS architecture 階段 | `train_corepromoter_tss_pas.py` |
 | `weights_CorePromoter_tss_pas.pt` | TSS/PAS 最終 model，design 可選 | `train_corepromoter_tss_pas.py` |
 | `weights_UP / Sp16 / Sp17 / Sp18 / Dis / ITS.pt` | element energy models | 對應的 element notebook |
-| `weights_minus35.pt` / `weights_minus10.pt` | **未使用**，-35/-10 走 BPM | 舊版遺留 |
+| `weights_minus35_unused.pt` / `weights_minus10_unused.pt` | **未使用**，-35/-10 走 BPM | 來源不明，產生它們的程式不在 repo；見 `weights/README.md` |
 
 - `.pt` 檔是已訓練的 model parameters/checkpoint；checkpoint 存在時，推論與 library design 不需要重新訓練。
 - 只有改變 model architecture、training data、training objective，或需要重新估計 weights 時才需重訓。

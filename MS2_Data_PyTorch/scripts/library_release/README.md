@@ -128,8 +128,7 @@ library_release/
 │   ├── native/        Data_S1_20250826.xlsx + 12 KEGG .keg
 │   └── phage/         17 genome .gb + T5 promoter.xlsx
 ├── outputs/           all pipeline CSVs land here
-└── _duplicates/       byte-identical copies and off-pipeline notebooks,
-                       kept only so nothing was deleted; safe to remove
+└── (_duplicates/ was moved to _archive_20260918/ on 2026-09-18)
 ```
 
 Python libraries (`automated_promoter_library_design.py`,
@@ -139,9 +138,9 @@ Python libraries (`automated_promoter_library_design.py`,
 
 ## Notes
 
-- `tables/` is never written to by this pipeline. The older
-  `barcodes_15bp_HD3_no_RE_sites.csv` there is byte-identical to the 12 bp
-  files and should not be used; 05 regenerates barcodes into `outputs/`.
+- `tables/` is never written to by this pipeline. Its four barcode CSVs were
+  moved to `_archive_20260918/` on 2026-09-18; 05 regenerates barcodes into
+  `outputs/`.
 - `data/phage/*.gb` is matched by the repository-wide `*.gb` gitignore rule, so
   a fresh clone will not have the genomes 03 and 04 need.
 - `pas_library_qc.py` is not part of this pipeline. Register checking is done by
