@@ -59,10 +59,14 @@ SOURCE_SPECS = {
     "ITS": ("ITS.pkl", None),
 }
 
+# m35/m10 are scored by BPM, not by these two files. No code loads them: _load_all
+# skips m35/m10, and build_scored_pools points those two at BPM/Params_Con17.pkl.
+# They are kept, renamed _unused, because they rank hexamers differently from BPM
+# (Spearman 0.37 / -0.22) and that disagreement is worth being able to reproduce.
 WEIGHT_NAMES = {
     "UP": "weights_UP.pt",
-    "m35": "weights_minus35.pt",
-    "m10": "weights_minus10.pt",
+    "m35": "weights_minus35_unused.pt",
+    "m10": "weights_minus10_unused.pt",
     "DIS": "weights_Dis.pt",
     "ITS": "weights_ITS.pt",
 }
