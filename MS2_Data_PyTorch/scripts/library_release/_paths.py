@@ -53,7 +53,7 @@ RELEASE_OUT = RELEASE_DIR / "outputs"
 TABLE_DIR = MS2_DIR / "tables"
 WEIGHTS_DIR = MS2_DIR / "weights"
 BPM_DIR = SCRIPTS_DIR / "BPM"
-DESIGN_OUT_ROOT = PROJECT_ROOT / "outputs" / "019ec8ae-c0ac-7190-868c-5c4ba74a5396"
+DESIGN_OUT_ROOT = PROJECT_ROOT / "outputs" / "design_runs"
 
 RELEASE_OUT.mkdir(parents=True, exist_ok=True)
 

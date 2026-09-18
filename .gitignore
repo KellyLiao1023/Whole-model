@@ -77,3 +77,10 @@ Thumbs.db
 *.pptx
 *.docx
 /Design.xlsx
+
+# Handover freeze snapshot (2026-09-18): 300 MB of final outputs, delivered
+# alongside tables/ and genomes/, never through Git.
+/_frozen_20260918/
+
+# Handover archive (2026-09-18): moved here instead of deleted, pending a final call.
+/_archive_20260918/

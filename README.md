@@ -327,7 +327,7 @@ risk_iter_<NN>.csv / overlap_iter_<NN>.csv / accepted_elements_iter_<NN>.csv
 預設輸出位置：
 
 ```text
-outputs/019ec8ae-c0ac-7190-868c-5c4ba74a5396/automated_redesign_<timestamp>/
+outputs/design_runs/automated_redesign_<timestamp>/
 outputs/energy_bin_cache/            # scored pool 快取，依 PKL 與 weight 的檔案 signature 失效
 ```
 

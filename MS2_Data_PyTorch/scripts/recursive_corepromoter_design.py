@@ -36,7 +36,7 @@ MS2_DIR = PROJECT_ROOT / "MS2_Data_PyTorch"
 SCRIPT_DIR = MS2_DIR / "scripts"
 TABLE_DIR = MS2_DIR / "tables"
 WEIGHTS_DIR = MS2_DIR / "weights"
-DEFAULT_PARENT_OUT = PROJECT_ROOT / "outputs" / "019ec8ae-c0ac-7190-868c-5c4ba74a5396"
+DEFAULT_PARENT_OUT = PROJECT_ROOT / "outputs" / "design_runs"
 
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
