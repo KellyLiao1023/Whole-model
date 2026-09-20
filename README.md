@@ -8,7 +8,7 @@
 - UP、-35、spacer、-10、DIS、ITS 等 element scoring models
 - 以 energy bin 從 high-throughput database 取樣的 automated promoter library redesign
 - CorePromoter model energy 與天然 promoter 保守度的關聯分析
-- restriction-site scan 與 element replacement 等輔助工具
+- 組裝後整條序列的 restriction-site scan
 
 ## Pipeline 概覽
 
@@ -51,7 +51,6 @@ MS2_Data_PyTorch/
 │   ├── Model_PL.ipynb                              # -35 / -10 的 BPM data flow
 │   ├── automated_promoter_library_design.py        # energy-bin design space + 自動搜尋
 │   ├── recursive_corepromoter_design.py            # 共用 model 定義與訓練資料組裝
-│   ├── anchor_pull_replacement.py                  # 單一 element 的替換候選建議
 │   ├── util.py                                     # PFM / logo / 繪圖小工具
 │   ├── BPM/                                        # BPM.py、util.py、Params_Con17.pkl
 │   └── library_release/                            # 文庫產出 pipeline 01-07，見該目錄 README
@@ -59,11 +58,10 @@ MS2_Data_PyTorch/
 ├── genomes/     # 參考基因體 GenBank 檔（*.gb，不納入 Git）
 ├── weights/     # 已訓練的 checkpoint 與 metadata（納入 Git）
 ├── figures/     # notebook 產生的圖（*.png / *.svg，不納入 Git）
-└── outputs/     # energy_vs_conservation 與 replacement 的輸出（不納入 Git）
+└── outputs/     # energy_vs_conservation 的輸出（不納入 Git）
 
 outputs/design_runs/        # library design 每次搜尋的輸出（不納入 Git）
 outputs/energy_bin_cache/   # scored pool 快取（不納入 Git）
-Promoter_library_design/    # 下游候選/變體資料夾，不在本 repository 內
 ```
 
 ## Environment
@@ -103,7 +101,6 @@ ITS.pkl     # ITS
 
 - 保守度分析與 `library_release/02`：`MS2_Data_PyTorch/tables/Data_S1_20250826.xlsx`
 - 保守度分析的背景組成：`MS2_Data_PyTorch/genomes/NC_000913.2.gb`（E. coli K-12 MG1655）；`*.gb` 被 gitignore，需自行下載
-- `anchor_pull_replacement.py`：`tables/assembled_nn_scan_clean.csv`，以及 repository 之外的 `Promoter_library_design/candidates_output`、`variants_output`
 - `library_release/07_re_scan.ipynb`：讀 `library_release/outputs/06_whole_sequence.csv`
   （舊的 `tables/assembled_scan.csv` 是 93 nt 的過期 BG5/BG3 版本，已移到 `_archive_20260918/`）
 - repository 內只保留兩份小型 shared tables：`elements_shared.csv`、`phage_promoters.csv`
@@ -290,46 +287,13 @@ MS2_Data_PyTorch/figures/EnergyVsLog2Enrichment_perbase_byElement_Ecoli_sp17.{pn
 
 `plot_by_element(..., groups=[...])` 可把欄位換成任意位置子集（元件名、rel_pos 區間、`element_positions()` 取前/後 N 個、或自訂遮罩），版面與統計標註完全一樣；notebook 內附五個已註解的範例。
 
-## 5. QC 與輔助工具
-
-### Restriction site scan
+## 5. Restriction site scan
 
 ```text
 MS2_Data_PyTorch/scripts/library_release/07_re_scan.ipynb
 ```
 
 對整條 `full_sequence` 掃 19 種常用 restriction site（非回文的 Eco31I 連反股一起掃）。利用 06 記錄的 segment offset，把每個切位歸屬到 BG5 / promoter / RE1 / RE2 / barcode / BG3，只有落在固定側翼之外的才算 unexpected。輸出 `outputs/07_re_scan_report.csv`。
-
-### 單一 element 替換建議
-
-```python
-from anchor_pull_replacement import suggest_replacements
-
-result = suggest_replacements(
-    scan_df, element_type="UP", bad_seq="...",
-    scanner=scan_corepromoter_model,   # 由 notebook 傳入，確保用同一個模型與 offset
-)
-```
-
-把某條有問題的 element 序列放進所有已鎖定 context 重掃，排序出替換候選，輸出 Excel 到 `MS2_Data_PyTorch/outputs/replacement_<element>_<seq>_<timestamp>.xlsx`。預設候選來源是 repository 之外的 `Promoter_library_design/candidates_output` 與 `variants_output`。
-
-## 已終止的支線
-
-**TSS/PAS CorePromoter training。** 曾經用多物種 TSS/PAS 資料（Data_S1）做三階段訓練，
-想改良 CorePromoter 的 architecture 辨識能力。這條路已經停止，不再繼續。
-
-2026-09-20 移除的檔案：`tss_pas_dataset.py`、`train_corepromoter_tss_pas.py`、
-`evaluate_corepromoter_tss_pas.py`、`Model_CorePromoter_TSS_pretrain.ipynb`、
-`weights_CorePromoter_tss_arch.pt`、`weights_CorePromoter_tss_pas.pt`。
-`01_recursive_design.ipynb` 原本可以用 `CORE_MODEL_VARIANT` 切換到這個 checkpoint，
-該選項一併移除，Batch 0 現在直接使用 baseline。
-
-**PAS / BPM library QC（`pas_library_qc.py`）。** register 檢查在 pipeline 內由
-`automated_promoter_library_design.CorePromoterScanner.scan()` 負責，用的是設計時
-最佳化的那個 CorePromoter 模型。這支是獨立的第二實作，同日移除。
-
-兩者都保留在 git 歷史與 `_archive_20260918/retired_tss_branch/`，需要時可取回。
-`Data_S1_20250826.xlsx` **不受影響**，保守度分析與 `library_release/02` 仍然需要它。
 
 ## Model checkpoint 說明
 
