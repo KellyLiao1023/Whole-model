@@ -131,7 +131,7 @@ library_release/
 └── (_duplicates/ was moved to _archive_20260918/ on 2026-09-18)
 ```
 
-Python libraries (`automated_promoter_library_design.py`,
+Python libraries (`automated_promoter_library_design/`,
 `recursive_corepromoter_design.py`) and `BPM/` stay in
 `MS2_Data_PyTorch/scripts/`;
 `_paths.py` puts that directory on `sys.path`.

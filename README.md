@@ -26,7 +26,7 @@ Expression libraries (PL / SL16 / SL17 / SL18 / DL / UL / ITS)
                                 │
                                 ▼
         library_release/01_recursive_design.ipynb
-        (automated_promoter_library_design.py)
+        (automated_promoter_library_design/)
                                 │
                                 ▼
                     promoter library outputs
@@ -49,7 +49,14 @@ MS2_Data_PyTorch/
 │   │   / Model_Dis.ipynb / Model_ITS.ipynb
 │   │                                               # element scoring models
 │   ├── Model_PL.ipynb                              # -35 / -10 的 BPM data flow
-│   ├── automated_promoter_library_design.py        # energy-bin design space + 自動搜尋
+│   ├── automated_promoter_library_design/          # 設計函式庫，一個模組對應一個 Batch
+│   │   ├── __init__.py                         # 門面與索引：整包的公開名稱都在這
+│   │   ├── _common.py                          # 常數與小工具（各 Batch 都會用到）
+│   │   ├── config.py                           # DesignConfig 與 run config      → Batch 0
+│   │   ├── scoring.py                          # 元件打分、序列池、能量分箱       → Batch 0.5、1
+│   │   ├── space.py                            # DesignSpace、gap 分配、組裝      → Batch 2、3
+│   │   ├── scanning.py                         # register 掃描與偏移診斷          → Batch 4、5
+│   │   └── search.py                           # AutomatedRedesigner              → Batch 6
 │   ├── recursive_corepromoter_design.py            # 共用 model 定義與訓練資料組裝
 │   ├── util.py                                     # PFM / logo / 繪圖小工具
 │   ├── BPM/                                        # BPM.py、util.py、Params_Con17.pkl
@@ -79,7 +86,7 @@ torch, numpy, pandas, scipy, scikit-learn, openpyxl, jupyterlab, matplotlib, sea
 | `biopython` | `Model_CorePromoter_energy_vs_conservation.ipynb` 讀 GenBank |
 | `logomaker` | `Model_CorePromoter_clean.ipynb` 與各 element model 的 sequence logo |
 | `tensorboard` | `Model_CorePromoter_clean.ipynb` / `Model_CorePromoter_v0.ipynb` 的 `SummaryWriter` |
-| `tqdm` | `automated_promoter_library_design.py` 的進度顯示（缺少時自動退回無進度條） |
+| `tqdm` | `automated_promoter_library_design/search.py` 的進度顯示（缺少時自動退回無進度條） |
 
 建議建立獨立 virtual environment 後再安裝。GPU 並非必要；CLI scripts 的 `--device auto` 會在 CUDA 可用時使用 GPU，notebook 則以 `torch.cuda.is_available()` 自動選擇。`Model_CorePromoter_energy_vs_conservation.ipynb` 固定使用 CPU。
 
@@ -141,7 +148,7 @@ MS2_Data_PyTorch/scripts/Model_CorePromoter_clean.ipynb
 
 ```text
 MS2_Data_PyTorch/scripts/library_release/01_recursive_design.ipynb
-   └── 實作在 automated_promoter_library_design.py
+   └── 實作在 automated_promoter_library_design/（一個模組對應一個 Batch，見該套件的 __init__.py）
 ```
 
 這個流程**從 high-throughput PKL database 挑選既有序列，不做 de novo generation**。每個 element 依自己的 energy 分布切成等寬 bin，每個 bin 出一個 mutable 版本，再加一個 locked consensus；所有 mutable 版本必須弱於 locked consensus。
