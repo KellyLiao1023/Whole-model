@@ -314,18 +314,20 @@ class AutomatedRedesigner:
             )
         return result
 
-    def run(
+    def _start_or_resume(
         self,
-        initial_state: dict[DesignUnitKey, int] | None = None,
-        initial_evaluation: tuple[pd.DataFrame, pd.DataFrame, dict] | None = None,
-        resume: bool = False,
-        reset_stalled_on_resume: bool = True,
-        progress_df: pd.DataFrame | None = None,
-        verbose: bool = False,
-    ) -> DesignResult:
-        self.out_dir.mkdir(parents=True, exist_ok=True)
-        self.live_progress_df = progress_df
-        self._verbose = verbose
+        resume: bool,
+        reset_stalled_on_resume: bool,
+        initial_state: dict[DesignUnitKey, int] | None,
+        initial_evaluation: tuple[pd.DataFrame, pd.DataFrame, dict] | None,
+    ) -> tuple:
+        """Get to the state iteration 1 starts from.
+
+        Resuming reads the checkpoint written by _persist_progress; a fresh run
+        evaluates the design space's initial state and writes the initial_* files.
+        Returns (state, elements, scan, summary, history_rows, proposal_rows,
+        stalled, start_iteration).
+        """
         if resume:
             state, last_iteration, stalled, history_rows, proposal_rows = self._load_resume_state()
             if reset_stalled_on_resume:
@@ -359,6 +361,231 @@ class AutomatedRedesigner:
                 history_rows=history_rows,
                 proposal_rows=proposal_rows,
             )
+        return (state, elements, scan, summary, history_rows, proposal_rows,
+                stalled, start_iteration)
+
+    def _report_iteration_start(self, pbar, iteration, phase, summary, stalled) -> None:
+        """Progress-bar postfix, plus the full per-iteration line when verbose."""
+        pbar.set_postfix(
+            phase=phase,
+            m10=f"{summary['m10_shifted_rate']:.1%}",
+            m35=f"{summary['m35_shifted_rate']:.1%}",
+            stalled=f"{stalled}/{self.max_stalled_iterations}",
+        )
+        if self._verbose:
+            print(
+                f"\n[Iteration {iteration}] phase={phase} "
+                f"(m10 gate<={self.config.m10_phase_exit_rate:.0%} "
+                f"{'open' if summary['m10_phase_gate_pass'] else 'closed'}) | "
+                f"m10 shifted={summary['m10_shifted_rate']:.2%} "
+                f"out={summary['m10_out_of_range_count']} max_abs={summary['m10_max_abs_shift']} | "
+                f"m35 shifted={summary['m35_shifted_rate']:.2%} "
+                f"out={summary['m35_out_of_range_count']} max_abs={summary['m35_max_abs_shift']} | "
+                f"stalled={stalled}/{self.max_stalled_iterations}",
+                flush=True,
+            )
+
+    def _select_drivers(self, scan, elements, phase, iteration) -> list[DesignUnitKey]:
+        """The element versions most responsible for the current shift.
+
+        Also writes this iteration's risk_iter_NN.csv and overlap_iter_NN.csv.
+        """
+        diagnosis = diagnose_shift_drivers(
+            scan,
+            elements,
+            self.design_space,
+            self.config,
+            phase=phase,
+        )
+        diagnosis["risk"].to_csv(self.out_dir / f"risk_iter_{iteration:02d}.csv", index=False)
+        diagnosis["overlap"].to_csv(self.out_dir / f"overlap_iter_{iteration:02d}.csv", index=False)
+        drivers = diagnosis["driver_units"][: self.n_driver_units]
+        if self._verbose:
+            print(
+                f"  dominant {phase}_shift={diagnosis['dominant_shift']} | "
+                f"drivers={[key.label() for key in drivers]}",
+                flush=True,
+            )
+        return drivers
+
+    def _report_driver_pools(self, state, drivers) -> None:
+        """How many untried alternatives each driver still has, when verbose."""
+        driver_pool_status = []
+        for key in drivers:
+            total_alternatives = len(self.design_space.unit_candidates[key]) - 1
+            remaining = len(self._remaining_indices(state, key))
+            driver_pool_status.append(
+                f"{key.label()} remaining={remaining}/{total_alternatives}"
+            )
+        if self._verbose:
+            print(f"  driver pools: {driver_pool_status}", flush=True)
+
+    def _propose_moves(self, iteration, state, drivers, phase, elements, scan) -> list[dict]:
+        """One replacement per driver, then disjoint pairs drawn from the best of them.
+
+        Pairing stops at max_pair_evaluations; pairs that touch the same design
+        unit are skipped because their changes would collide.
+        """
+        evaluated_proposals = []
+        for key in drivers:
+            for idx in self._next_indices(state, key):
+                proposal = self._evaluate_proposal(
+                    iteration, state, {key: idx}, phase, "single",
+                    baseline_elements=elements, baseline_scan=scan,
+                )
+                if proposal is not None:
+                    evaluated_proposals.append(proposal)
+
+        valid_singles = [p for p in evaluated_proposals if p.get("valid")]
+        valid_singles.sort(key=lambda p: p["objective"])
+        beam = valid_singles[: self.pair_beam_width]
+        pair_count = 0
+        for left, right in itertools.combinations(beam, 2):
+            left_changes = left["change_map"]
+            right_changes = right["change_map"]
+            if set(left_changes) & set(right_changes):
+                continue
+            changes = {**left_changes, **right_changes}
+            proposal = self._evaluate_proposal(
+                iteration, state, changes, phase, "double",
+                baseline_elements=elements, baseline_scan=scan,
+            )
+            if proposal is not None:
+                evaluated_proposals.append(proposal)
+                pair_count += 1
+            if pair_count >= self.max_pair_evaluations:
+                break
+        return evaluated_proposals
+
+    def _record_proposals(self, proposal_rows, evaluated_proposals, phase) -> None:
+        """Append one audit row per proposal, accepted or not."""
+        for proposal in evaluated_proposals:
+            row = {
+                "iteration": proposal["iteration"],
+                "phase": phase,
+                "proposal_type": proposal["proposal_type"],
+                "changes": proposal["changes"],
+                "valid": proposal.get("valid", False),
+                "error": proposal.get("error", ""),
+                "accepted": False,
+            }
+            if proposal.get("valid"):
+                row.update(proposal["summary"])
+                row["objective"] = repr(proposal["objective"])
+            proposal_rows.append(row)
+
+    def _improving_candidates(self, evaluated_proposals, summary, phase, current_objective) -> list[dict]:
+        """Valid proposals that strictly beat the current objective.
+
+        In the m35 phase, a proposal that lets m10 get worse is dropped first.
+        """
+        candidates = [p for p in evaluated_proposals if p.get("valid")]
+        if phase == "m35":
+            # Hard constraint for the -35 correction phase: m10 may stay
+            # equal but must never get worse. Measured against the current
+            # library's shifted count rather than max_shift_rate, because
+            # this phase can be entered anywhere up to m10_phase_exit_rate
+            # and m10 must not drift back up from wherever it started.
+            current_m10_shifted = int(summary["m10_shifted_count"])
+            candidates = [
+                p
+                for p in candidates
+                if int(p["summary"]["m10_shifted_count"]) <= current_m10_shifted
+            ]
+        improving = [p for p in candidates if p["objective"] < current_objective]
+        return improving
+
+    def _record_stop(
+        self, iteration, stalled, state, elements, summary,
+        history_rows, proposal_rows, change_label, stop_reason,
+    ) -> str:
+        """Write the history row and flush progress for a loop exit. Returns stop_reason."""
+        history_rows.append(
+            {"iteration": iteration, "accepted": False, "changes": change_label, **summary}
+        )
+        self._persist_progress(
+            iteration, stalled, state, elements, summary, history_rows, proposal_rows, stop_reason
+        )
+        return stop_reason
+
+    def _write_final_outputs(
+        self, last_completed_iteration, stalled, state, elements, scan, summary,
+        history_rows, proposal_rows, stop_reason,
+    ) -> DesignResult:
+        """Final diagnosis, the eight output files, and the DesignResult."""
+        self._persist_progress(
+            last_completed_iteration,
+            stalled,
+            state,
+            elements,
+            summary,
+            history_rows,
+            proposal_rows,
+            stop_reason,
+        )
+        tqdm.write(
+            f"\n[Search stopped] reason={stop_reason} | "
+            f"last_iteration={last_completed_iteration} | "
+            f"m10={summary['m10_shifted_rate']:.2%} | "
+            f"m35={summary['m35_shifted_rate']:.2%}"
+        )
+
+        final_diagnosis = diagnose_shift_drivers(
+            scan,
+            elements,
+            self.design_space,
+            self.config,
+            phase=summary["phase"],
+        )
+        history = pd.DataFrame(history_rows)
+        proposals = pd.DataFrame(proposal_rows)
+        elements.to_csv(self.out_dir / "final_elements.csv", index=False)
+        scan.to_csv(self.out_dir / f"final_scan_{self.config.n_variants()}.csv", index=False)
+        history.to_csv(self.out_dir / "search_history.csv", index=False)
+        proposals.to_csv(self.out_dir / "proposal_history.csv", index=False)
+        final_diagnosis["risk"].to_csv(self.out_dir / "final_driver_risk.csv", index=False)
+        final_diagnosis["overlap"].to_csv(self.out_dir / "final_overlap_evidence.csv", index=False)
+        _json_dump(self.out_dir / "final_validation.json", {**summary, "stop_reason": stop_reason})
+        self.gap_assignment.to_csv(self.out_dir / "gap_assignment.csv", index=False)
+        return DesignResult(
+            success=bool(summary["global_validation_pass"]),
+            stop_reason=stop_reason,
+            out_dir=self.out_dir,
+            final_state=state,
+            final_elements=elements,
+            final_scan=scan,
+            final_summary=summary,
+            history=history,
+            proposals=proposals,
+            final_risk=final_diagnosis["risk"],
+            final_overlap=final_diagnosis["overlap"],
+        )
+
+    def run(
+        self,
+        initial_state: dict[DesignUnitKey, int] | None = None,
+        initial_evaluation: tuple[pd.DataFrame, pd.DataFrame, dict] | None = None,
+        resume: bool = False,
+        reset_stalled_on_resume: bool = True,
+        progress_df: pd.DataFrame | None = None,
+        verbose: bool = False,
+    ) -> DesignResult:
+        """Search for a design that passes register validation, one accepted move
+        at a time.
+
+        Each iteration: find the element versions driving the shift, propose
+        replacements for them, and take the best proposal only if it strictly
+        improves the objective. The loop stops on validation passing, on running
+        out of candidates, on stalling, or on exhausting this run's allowance.
+        """
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.live_progress_df = progress_df
+        self._verbose = verbose
+
+        (state, elements, scan, summary, history_rows, proposal_rows,
+         stalled, start_iteration) = self._start_or_resume(
+            resume, reset_stalled_on_resume, initial_state, initial_evaluation
+        )
 
         last_completed_iteration = start_iteration - 1
         stop_reason = "running"
@@ -370,132 +597,38 @@ class AutomatedRedesigner:
                 break
             phase = summary["phase"]
             current_objective = objective_for_phase(summary, phase)
-            pbar.set_postfix(
-                phase=phase,
-                m10=f"{summary['m10_shifted_rate']:.1%}",
-                m35=f"{summary['m35_shifted_rate']:.1%}",
-                stalled=f"{stalled}/{self.max_stalled_iterations}",
-            )
-            if self._verbose:
-                print(
-                    f"\n[Iteration {iteration}] phase={phase} "
-                    f"(m10 gate<={self.config.m10_phase_exit_rate:.0%} "
-                    f"{'open' if summary['m10_phase_gate_pass'] else 'closed'}) | "
-                    f"m10 shifted={summary['m10_shifted_rate']:.2%} "
-                    f"out={summary['m10_out_of_range_count']} max_abs={summary['m10_max_abs_shift']} | "
-                    f"m35 shifted={summary['m35_shifted_rate']:.2%} "
-                    f"out={summary['m35_out_of_range_count']} max_abs={summary['m35_max_abs_shift']} | "
-                    f"stalled={stalled}/{self.max_stalled_iterations}",
-                    flush=True,
-                )
-            diagnosis = diagnose_shift_drivers(
-                scan,
-                elements,
-                self.design_space,
-                self.config,
-                phase=phase,
-            )
-            diagnosis["risk"].to_csv(self.out_dir / f"risk_iter_{iteration:02d}.csv", index=False)
-            diagnosis["overlap"].to_csv(self.out_dir / f"overlap_iter_{iteration:02d}.csv", index=False)
-            drivers = diagnosis["driver_units"][: self.n_driver_units]
-            if self._verbose:
-                print(
-                    f"  dominant {phase}_shift={diagnosis['dominant_shift']} | "
-                    f"drivers={[key.label() for key in drivers]}",
-                    flush=True,
-                )
+            self._report_iteration_start(pbar, iteration, phase, summary, stalled)
+
+            drivers = self._select_drivers(scan, elements, phase, iteration)
             if not drivers:
-                history_rows.append(
-                    {"iteration": iteration, "accepted": False, "changes": "no_actionable_driver", **summary}
+                stop_reason = self._record_stop(
+                    iteration, stalled, state, elements, summary, history_rows,
+                    proposal_rows, "no_actionable_driver", "no_actionable_driver",
                 )
                 last_completed_iteration = iteration
-                stop_reason = "no_actionable_driver"
-                self._persist_progress(
-                    iteration, stalled, state, elements, summary, history_rows, proposal_rows, stop_reason
-                )
                 break
+            self._report_driver_pools(state, drivers)
 
-            driver_pool_status = []
-            for key in drivers:
-                total_alternatives = len(self.design_space.unit_candidates[key]) - 1
-                remaining = len(self._remaining_indices(state, key))
-                driver_pool_status.append(
-                    f"{key.label()} remaining={remaining}/{total_alternatives}"
-                )
-            if self._verbose:
-                print(f"  driver pools: {driver_pool_status}", flush=True)
-
-            evaluated_proposals = []
-            for key in drivers:
-                for idx in self._next_indices(state, key):
-                    proposal = self._evaluate_proposal(
-                        iteration, state, {key: idx}, phase, "single",
-                        baseline_elements=elements, baseline_scan=scan,
-                    )
-                    if proposal is not None:
-                        evaluated_proposals.append(proposal)
-
-            valid_singles = [p for p in evaluated_proposals if p.get("valid")]
-            valid_singles.sort(key=lambda p: p["objective"])
-            beam = valid_singles[: self.pair_beam_width]
-            pair_count = 0
-            for left, right in itertools.combinations(beam, 2):
-                left_changes = left["change_map"]
-                right_changes = right["change_map"]
-                if set(left_changes) & set(right_changes):
-                    continue
-                changes = {**left_changes, **right_changes}
-                proposal = self._evaluate_proposal(
-                    iteration, state, changes, phase, "double",
-                    baseline_elements=elements, baseline_scan=scan,
-                )
-                if proposal is not None:
-                    evaluated_proposals.append(proposal)
-                    pair_count += 1
-                if pair_count >= self.max_pair_evaluations:
-                    break
-
+            evaluated_proposals = self._propose_moves(
+                iteration, state, drivers, phase, elements, scan
+            )
             if not evaluated_proposals:
-                history_rows.append(
-                    {"iteration": iteration, "accepted": False, "changes": "no_unevaluated_candidates", **summary}
+                stop_reason = self._record_stop(
+                    iteration, stalled, state, elements, summary, history_rows,
+                    proposal_rows, "no_unevaluated_candidates",
+                    "candidate_pool_exhausted_for_current_drivers",
                 )
                 last_completed_iteration = iteration
-                stop_reason = "candidate_pool_exhausted_for_current_drivers"
-                self._persist_progress(
-                    iteration, stalled, state, elements, summary, history_rows, proposal_rows, stop_reason
-                )
                 tqdm.write("  STOP: no unevaluated candidates remain for the selected drivers.")
                 break
 
-            for proposal in evaluated_proposals:
-                row = {
-                    "iteration": proposal["iteration"],
-                    "phase": phase,
-                    "proposal_type": proposal["proposal_type"],
-                    "changes": proposal["changes"],
-                    "valid": proposal.get("valid", False),
-                    "error": proposal.get("error", ""),
-                    "accepted": False,
-                }
-                if proposal.get("valid"):
-                    row.update(proposal["summary"])
-                    row["objective"] = repr(proposal["objective"])
-                proposal_rows.append(row)
+            self._record_proposals(proposal_rows, evaluated_proposals, phase)
+            improving = self._improving_candidates(
+                evaluated_proposals, summary, phase, current_objective
+            )
 
-            candidates = [p for p in evaluated_proposals if p.get("valid")]
-            if phase == "m35":
-                # Hard constraint for the -35 correction phase: m10 may stay
-                # equal but must never get worse. Measured against the current
-                # library's shifted count rather than max_shift_rate, because
-                # this phase can be entered anywhere up to m10_phase_exit_rate
-                # and m10 must not drift back up from wherever it started.
-                current_m10_shifted = int(summary["m10_shifted_count"])
-                candidates = [
-                    p
-                    for p in candidates
-                    if int(p["summary"]["m10_shifted_count"]) <= current_m10_shifted
-                ]
-            improving = [p for p in candidates if p["objective"] < current_objective]
+            # The accepted move is what carries state into the next iteration, so
+            # this stays inline rather than moving behind another call.
             if improving:
                 best = min(improving, key=lambda p: p["objective"])
                 state = best["state"]
@@ -554,50 +687,7 @@ class AutomatedRedesigner:
         else:
             stop_reason = "max_iterations_this_run"
 
-        self._persist_progress(
-            last_completed_iteration,
-            stalled,
-            state,
-            elements,
-            summary,
-            history_rows,
-            proposal_rows,
-            stop_reason,
-        )
-        tqdm.write(
-            f"\n[Search stopped] reason={stop_reason} | "
-            f"last_iteration={last_completed_iteration} | "
-            f"m10={summary['m10_shifted_rate']:.2%} | "
-            f"m35={summary['m35_shifted_rate']:.2%}"
-        )
-
-        final_diagnosis = diagnose_shift_drivers(
-            scan,
-            elements,
-            self.design_space,
-            self.config,
-            phase=summary["phase"],
-        )
-        history = pd.DataFrame(history_rows)
-        proposals = pd.DataFrame(proposal_rows)
-        elements.to_csv(self.out_dir / "final_elements.csv", index=False)
-        scan.to_csv(self.out_dir / f"final_scan_{self.config.n_variants()}.csv", index=False)
-        history.to_csv(self.out_dir / "search_history.csv", index=False)
-        proposals.to_csv(self.out_dir / "proposal_history.csv", index=False)
-        final_diagnosis["risk"].to_csv(self.out_dir / "final_driver_risk.csv", index=False)
-        final_diagnosis["overlap"].to_csv(self.out_dir / "final_overlap_evidence.csv", index=False)
-        _json_dump(self.out_dir / "final_validation.json", {**summary, "stop_reason": stop_reason})
-        self.gap_assignment.to_csv(self.out_dir / "gap_assignment.csv", index=False)
-        return DesignResult(
-            success=bool(summary["global_validation_pass"]),
-            stop_reason=stop_reason,
-            out_dir=self.out_dir,
-            final_state=state,
-            final_elements=elements,
-            final_scan=scan,
-            final_summary=summary,
-            history=history,
-            proposals=proposals,
-            final_risk=final_diagnosis["risk"],
-            final_overlap=final_diagnosis["overlap"],
+        return self._write_final_outputs(
+            last_completed_iteration, stalled, state, elements, scan, summary,
+            history_rows, proposal_rows, stop_reason,
         )
