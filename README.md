@@ -5,11 +5,10 @@
 本專案目前包含：
 
 - baseline whole/CorePromoter model 的訓練流程與 frozen checkpoint
-- 使用多物種 TSS/PAS 資料改良 CorePromoter architecture 辨識能力
 - UP、-35、spacer、-10、DIS、ITS 等 element scoring models
 - 以 energy bin 從 high-throughput database 取樣的 automated promoter library redesign
 - CorePromoter model energy 與天然 promoter 保守度的關聯分析
-- restriction-site scan、PAS/BPM library QC 與 element replacement 等輔助工具
+- restriction-site scan 與 element replacement 等輔助工具
 
 ## Pipeline 概覽
 
@@ -22,15 +21,9 @@ Expression libraries (PL / SL16 / SL17 / SL18 / DL / UL / ITS)
         └──► Model_UP / Model_PL / Model_Sp16-18 /
              Model_Dis / Model_ITS.ipynb  ──────────────► weights_UP / Sp16-18 /
                                                           Dis / ITS.pt、BPM 參數
-TSS/PAS workbook (Data_S1)
-        │
-        ▼
-Model_CorePromoter_TSS_pretrain.ipynb 或 train_corepromoter_tss_pas.py
-        │
-        ├──► weights_CorePromoter_tss_arch.pt
-        └──► weights_CorePromoter_tss_pas.pt
-                        │
-Element models + energy bins ───┤
+                                │
+        Element models + energy bins
+                                │
                                 ▼
         library_release/01_recursive_design.ipynb
         (automated_promoter_library_design.py)
@@ -51,7 +44,6 @@ MS2_Data_PyTorch/
 ├── scripts/
 │   ├── Model_CorePromoter_clean.ipynb              # baseline whole model 訓練 + filter logo
 │   ├── Model_CorePromoter_v0.ipynb                 # clean 版之前的完整原始 notebook（保留參考）
-│   ├── Model_CorePromoter_TSS_pretrain.ipynb       # TSS/PAS 三階段訓練
 │   ├── Model_CorePromoter_energy_vs_conservation.ipynb  # energy vs 天然保守度分析
 │   ├── Model_UP.ipynb / Model_Sp16.ipynb / Model_Sp17.ipynb / Model_Sp18.ipynb
 │   │   / Model_Dis.ipynb / Model_ITS.ipynb
@@ -59,11 +51,7 @@ MS2_Data_PyTorch/
 │   ├── Model_PL.ipynb                              # -35 / -10 的 BPM data flow
 │   ├── automated_promoter_library_design.py        # energy-bin design space + 自動搜尋
 │   ├── recursive_corepromoter_design.py            # 共用 model 定義與訓練資料組裝
-│   ├── train_corepromoter_tss_pas.py               # TSS/PAS 訓練 CLI
-│   ├── evaluate_corepromoter_tss_pas.py            # baseline vs TSS/PAS 評估 CLI
-│   ├── tss_pas_dataset.py                          # TSS/PAS 資料前處理 CLI
 │   ├── anchor_pull_replacement.py                  # 單一 element 的替換候選建議
-│   ├── pas_library_qc.py                           # PAS/BPM library QC CLI（不在 library release pipeline 內）
 │   ├── util.py                                     # PFM / logo / 繪圖小工具
 │   ├── BPM/                                        # BPM.py、util.py、Params_Con17.pkl
 │   └── library_release/                            # 文庫產出 pipeline 01-07，見該目錄 README
@@ -73,7 +61,8 @@ MS2_Data_PyTorch/
 ├── figures/     # notebook 產生的圖（*.png / *.svg，不納入 Git）
 └── outputs/     # energy_vs_conservation 與 replacement 的輸出（不納入 Git）
 
-outputs/                    # 根目錄 run 輸出：訓練、評估、library design（不納入 Git）
+outputs/design_runs/        # library design 每次搜尋的輸出（不納入 Git）
+outputs/energy_bin_cache/   # scored pool 快取（不納入 Git）
 Promoter_library_design/    # 下游候選/變體資料夾，不在本 repository 內
 ```
 
@@ -112,7 +101,7 @@ ITS.pkl     # ITS
 
 其他資料需求：
 
-- TSS/PAS 訓練與保守度分析：`MS2_Data_PyTorch/tables/Data_S1_20250826.xlsx`
+- 保守度分析與 `library_release/02`：`MS2_Data_PyTorch/tables/Data_S1_20250826.xlsx`
 - 保守度分析的背景組成：`MS2_Data_PyTorch/genomes/NC_000913.2.gb`（E. coli K-12 MG1655）；`*.gb` 被 gitignore，需自行下載
 - `anchor_pull_replacement.py`：`tables/assembled_nn_scan_clean.csv`，以及 repository 之外的 `Promoter_library_design/candidates_output`、`variants_output`
 - `library_release/07_re_scan.ipynb`：讀 `library_release/outputs/06_whole_sequence.csv`
@@ -131,7 +120,7 @@ MS2_Data_PyTorch/scripts/Model_CorePromoter_clean.ipynb
 
 這本 notebook 做的是：組裝 7 個 library 的訓練資料 → 定義 8 filters × 3 spacer channels 的 `DNAFunctionPredictor` → train/test 評估 → 畫 conv1 filter logo 與 spacer 對齊後的 spatial logo。
 
-**它不會寫出 checkpoint。** `weights/weights_CorePromoter_clean.pt` 是已納入 Git 的 frozen baseline，下游（TSS/PAS 訓練、library design、保守度分析）一律載入這個檔案。要更新 baseline 必須手動存檔並確認下游是否需要重跑。相關的 `_history.csv`、`_metadata.json`、`_training_counts.csv` 同樣保留在 `weights/`。
+**它不會寫出 checkpoint。** `weights/weights_CorePromoter_clean.pt` 是已納入 Git 的 frozen baseline，下游（library design、保守度分析）一律載入這個檔案。要更新 baseline 必須手動存檔並確認下游是否需要重跑。相關的 `_history.csv`、`_metadata.json`、`_training_counts.csv` 同樣保留在 `weights/`。
 
 `Model_CorePromoter_v0.ipynb` 是 clean 版之前的完整 notebook，含 BPM scan 與 debug cells，僅作參考。
 
@@ -149,74 +138,7 @@ MS2_Data_PyTorch/scripts/Model_CorePromoter_clean.ipynb
 
 所有 element score 都是「higher = stronger」，但**不同 element 的分數不可互相比較**。
 
-## 3. TSS/PAS CorePromoter training
-
-### Notebook 方式
-
-```text
-MS2_Data_PyTorch/scripts/Model_CorePromoter_TSS_pretrain.ipynb
-```
-
-Cell 1 設定 → Cell 2 產生並驗證 dataset → Cell 3 訓練並存檔 → Cell 4 比較 baseline 與新 checkpoint → Cell 5 可選的 leave-one-library-out（預設關閉，`RUN_STRICT_LOLO`）。此流程不會覆寫 `weights_CorePromoter_clean.pt`。
-
-### Command line 方式
-
-從 repository 根目錄執行：
-
-```powershell
-python MS2_Data_PyTorch/scripts/train_corepromoter_tss_pas.py --prepare-data --device auto
-```
-
-訓練分為三個階段：
-
-1. TSS/PAS architecture pretraining
-2. expression head recalibration
-3. architecture 與 expression joint fine-tuning
-
-主要輸出：
-
-```text
-MS2_Data_PyTorch/weights/weights_CorePromoter_tss_arch.pt
-MS2_Data_PyTorch/weights/weights_CorePromoter_tss_pas.pt
-outputs/tss_pas_dataset/tss_pas_processed.pkl
-outputs/corepromoter_tss_pas/<timestamp>/training_history.csv
-outputs/corepromoter_tss_pas/<timestamp>/model_metrics.csv
-outputs/corepromoter_tss_pas/<timestamp>/training_config.json
-```
-
-若 processed dataset 已存在，可以省略 `--prepare-data`；也可以單獨執行前處理：
-
-```powershell
-python MS2_Data_PyTorch/scripts/tss_pas_dataset.py --xlsx MS2_Data_PyTorch/tables/Data_S1_20250826.xlsx
-```
-
-常用選項（epoch 數、batch size、checkpoint 路徑等）：
-
-```powershell
-python MS2_Data_PyTorch/scripts/train_corepromoter_tss_pas.py --help
-```
-
-## 4. Model evaluation
-
-比較 baseline 與 TSS/PAS checkpoints：
-
-```powershell
-python MS2_Data_PyTorch/scripts/evaluate_corepromoter_tss_pas.py --device auto
-```
-
-若需要較耗時的 leave-one-library-out comparison（會重訓 fold models）：
-
-```powershell
-python MS2_Data_PyTorch/scripts/evaluate_corepromoter_tss_pas.py --device auto --run-lolo
-```
-
-評估結果預設輸出至：
-
-```text
-outputs/corepromoter_tss_pas_evaluation/<timestamp>/
-```
-
-## 5. Automated promoter library redesign
+## 3. Automated promoter library redesign
 
 主要入口：
 
@@ -244,15 +166,10 @@ MS2_Data_PyTorch/scripts/library_release/01_recursive_design.ipynb
 ### 主要設定（Batch 0）
 
 ```python
-CORE_MODEL_VARIANT = "baseline"  # "baseline" or "tss_pas"
+CORE_MODEL_CHECKPOINT = r.WEIGHTS_DIR / "weights_CorePromoter_clean.pt"
 RUN_MODE = "new"                 # "new" or "resume"
 RESUME_DIR = r.DEFAULT_PARENT_OUT / "automated_redesign_<timestamp>"
 ```
-
-| Variant | Checkpoint |
-| --- | --- |
-| `baseline` | `weights_CorePromoter_clean.pt` |
-| `tss_pas` | `weights_CorePromoter_tss_pas.pt` |
 
 energy bin 邊界逐 element 指定為 `(lower_fraction, upper_fraction, n_bins)`，數值是該 element 自己觀測 min–max energy 軸上的比例，可直接從 Batch 0.5 的上緣副軸讀出：
 
@@ -336,7 +253,7 @@ outputs/energy_bin_cache/            # scored pool 快取，依 PKL 與 weight �
 
 改動 bin 邊界不需要重算 energy，快取仍然有效；來源 PKL 或 element weights 更新後會自動重建。
 
-## 6. Energy vs conservation 分析
+## 4. Energy vs conservation 分析
 
 ```text
 MS2_Data_PyTorch/scripts/Model_CorePromoter_energy_vs_conservation.ipynb
@@ -373,7 +290,7 @@ MS2_Data_PyTorch/figures/EnergyVsLog2Enrichment_perbase_byElement_Ecoli_sp17.{pn
 
 `plot_by_element(..., groups=[...])` 可把欄位換成任意位置子集（元件名、rel_pos 區間、`element_positions()` 取前/後 N 個、或自訂遮罩），版面與統計標註完全一樣；notebook 內附五個已註解的範例。
 
-## 7. QC 與輔助工具
+## 5. QC 與輔助工具
 
 ### Restriction site scan
 
@@ -382,16 +299,6 @@ MS2_Data_PyTorch/scripts/library_release/07_re_scan.ipynb
 ```
 
 對整條 `full_sequence` 掃 19 種常用 restriction site（非回文的 Eco31I 連反股一起掃）。利用 06 記錄的 segment offset，把每個切位歸屬到 BG5 / promoter / RE1 / RE2 / barcode / BG3，只有落在固定側翼之外的才算 unexpected。輸出 `outputs/07_re_scan_report.csv`。
-
-### PAS / BPM library QC（獨立工具，不在 library release pipeline 內）
-
-> Register 檢查在 pipeline 內由 `automated_promoter_library_design.CorePromoterScanner.scan()` 負責，用的是設計時最佳化的那個 CorePromoter 模型。此處的 BPM 版本是獨立的第二實作，保留作臨時交叉檢查用。
-
-```powershell
-python MS2_Data_PyTorch/scripts/pas_library_qc.py --variant_table <variants.csv> --output_dir <out>
-```
-
-用 frozen BPM 參數（`BPM/Params_Con17.pkl`）檢查 fixed-register 設計是否可靠：以 Boltzmann 權重算 `P_design`，並以 `delta_E` 判斷是否存在比設計 register 更強的 off-register architecture。此腳本只使用參數，不重訓 PAS。若換成 higher-is-better 的模型，加上 `--score_is_energy false`。
 
 ### 單一 element 替換建議
 
@@ -406,13 +313,29 @@ result = suggest_replacements(
 
 把某條有問題的 element 序列放進所有已鎖定 context 重掃，排序出替換候選，輸出 Excel 到 `MS2_Data_PyTorch/outputs/replacement_<element>_<seq>_<timestamp>.xlsx`。預設候選來源是 repository 之外的 `Promoter_library_design/candidates_output` 與 `variants_output`。
 
+## 已終止的支線
+
+**TSS/PAS CorePromoter training。** 曾經用多物種 TSS/PAS 資料（Data_S1）做三階段訓練，
+想改良 CorePromoter 的 architecture 辨識能力。這條路已經停止，不再繼續。
+
+2026-09-20 移除的檔案：`tss_pas_dataset.py`、`train_corepromoter_tss_pas.py`、
+`evaluate_corepromoter_tss_pas.py`、`Model_CorePromoter_TSS_pretrain.ipynb`、
+`weights_CorePromoter_tss_arch.pt`、`weights_CorePromoter_tss_pas.pt`。
+`01_recursive_design.ipynb` 原本可以用 `CORE_MODEL_VARIANT` 切換到這個 checkpoint，
+該選項一併移除，Batch 0 現在直接使用 baseline。
+
+**PAS / BPM library QC（`pas_library_qc.py`）。** register 檢查在 pipeline 內由
+`automated_promoter_library_design.CorePromoterScanner.scan()` 負責，用的是設計時
+最佳化的那個 CorePromoter 模型。這支是獨立的第二實作，同日移除。
+
+兩者都保留在 git 歷史與 `_archive_20260918/retired_tss_branch/`，需要時可取回。
+`Data_S1_20250826.xlsx` **不受影響**，保守度分析與 `library_release/02` 仍然需要它。
+
 ## Model checkpoint 說明
 
 | Checkpoint | 用途 | 由誰產生 |
 | --- | --- | --- |
 | `weights_CorePromoter_clean.pt` | baseline whole model；design 與保守度分析的預設 | frozen，已納入 Git |
-| `weights_CorePromoter_tss_arch.pt` | TSS/PAS architecture 階段 | `train_corepromoter_tss_pas.py` |
-| `weights_CorePromoter_tss_pas.pt` | TSS/PAS 最終 model，design 可選 | `train_corepromoter_tss_pas.py` |
 | `weights_UP / Sp16 / Sp17 / Sp18 / Dis / ITS.pt` | element energy models | 對應的 element notebook |
 | `weights_minus35_unused.pt` / `weights_minus10_unused.pt` | **未使用**，-35/-10 走 BPM | 來源不明，產生它們的程式不在 repo；見 `weights/README.md` |
 

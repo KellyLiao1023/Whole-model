@@ -132,8 +132,8 @@ library_release/
 ```
 
 Python libraries (`automated_promoter_library_design.py`,
-`recursive_corepromoter_design.py`, `anchor_pull_replacement.py`,
-`pas_library_qc.py`) and `BPM/` stay in `MS2_Data_PyTorch/scripts/`;
+`recursive_corepromoter_design.py`, `anchor_pull_replacement.py`)
+and `BPM/` stay in `MS2_Data_PyTorch/scripts/`;
 `_paths.py` puts that directory on `sys.path`.
 
 ## Notes
@@ -143,9 +143,10 @@ Python libraries (`automated_promoter_library_design.py`,
   `outputs/`.
 - `data/phage/*.gb` is matched by the repository-wide `*.gb` gitignore rule, so
   a fresh clone will not have the genomes 03 and 04 need.
-- `pas_library_qc.py` is not part of this pipeline. Register checking is done by
+- Register checking is done by
   `automated_promoter_library_design.CorePromoterScanner.scan()`, which uses the
-  CorePromoter model the design was optimised against.
+  CorePromoter model the design was optimised against. A second, BPM-based
+  implementation (`pas_library_qc.py`) was retired on 2026-09-20.
 - That register check runs inside 01, on the 124 nt designed construct, before
   RE1/RE2/barcode/BG3 are attached in 06. Nothing in this pipeline re-checks
   m35/m10 register on the fully flanked `full_sequence`; 07 only scans for

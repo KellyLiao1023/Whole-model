@@ -6,9 +6,10 @@
 
 | 檔案 | 誰載入 | 說明 |
 |---|---|---|
-| `weights_CorePromoter_clean.pt` | `01_recursive_design.ipynb`、保守度分析、register 診斷、能量軸比較、TSS/PAS 訓練 | 凍結的 baseline。`Model_CorePromoter_clean.ipynb` **不會寫出這個檔**，它是手動存的；要更新得自己存檔並確認下游是否要重跑 |
-| `weights_CorePromoter_tss_arch.pt`<br>`weights_CorePromoter_tss_pas.pt` | `evaluate_corepromoter_tss_pas.py`、01（`CORE_MODEL_VARIANT = "tss_pas"` 時） | TSS/PAS 三階段訓練的產物 |
+| `weights_CorePromoter_clean.pt` | `01_recursive_design.ipynb`、保守度分析、register 診斷、能量軸比較 | 凍結的 baseline。`Model_CorePromoter_clean.ipynb` **不會寫出這個檔**，它是手動存的；要更新得自己存檔並確認下游是否要重跑 |
 | `weights_CorePromoter_clean_0711.pt` | 無 | 舊版 baseline，留作對照 |
+
+TSS/PAS 的兩個 checkpoint 已於 2026-09-20 隨該支線一併移除，見根目錄 README 的「已終止的支線」。
 
 `weights_CorePromoter_clean_{history.csv, metadata.json, training_counts.csv}` 是對應的訓練紀錄。
 
