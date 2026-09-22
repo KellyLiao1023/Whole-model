@@ -1,0 +1,48 @@
+# 重建這個專案的執行環境：
+#
+#     conda env create -f environment.yml
+#     conda activate whole-model
+#
+# 版本取自 2026-09-22 實際跑通完整流程（01–07 與所有模型 notebook）的環境。
+# 只列真正會用到的套件；每一項後面都註明是誰在用，要增減時看得出影響範圍。
+#
+# GPU 並非必要。torch 在 CUDA 可用時自動使用 GPU，否則退回 CPU，流程本身不變。
+# 下面的 pytorch-cuda 是給有 NVIDIA 顯示卡的機器用的；沒有的話把那一行刪掉，
+# conda 會裝 CPU 版的 torch。
+
+name: whole-model
+
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+
+dependencies:
+  - python=3.11
+
+  # --- 模型 ---------------------------------------------------------------
+  - pytorch=2.9.1            # 所有模型的訓練與推論
+  - pytorch-cuda=12.8        # 有 NVIDIA 顯示卡才需要；沒有就刪掉這行
+  - tensorboard=2.20         # 各元件 notebook 訓練時的 SummaryWriter
+
+  # --- 數值與資料 ---------------------------------------------------------
+  - numpy=1.26.4
+  - pandas=2.3.3
+  - scipy=1.17               # 保守度分析的 Pearson / Spearman 與 permutation test
+  - scikit-learn=1.8         # 訓練資料切分
+  - openpyxl=3.1.5           # pandas 讀寫 .xlsx：02_native_selection、保守度分析
+
+  # --- 生物資訊 -----------------------------------------------------------
+  - biopython=1.87           # 讀 GenBank：03、04 的噬菌體掃描、保守度分析的背景組成
+
+  # --- 繪圖 ---------------------------------------------------------------
+  - matplotlib=3.10.7
+  - seaborn=0.13.2
+  - pip
+  - pip:
+      - logomaker==0.8.7     # sequence logo：CorePromoter 與各元件模型
+
+  # --- 執行 notebook ------------------------------------------------------
+  - jupyterlab
+  - ipykernel=7.1            # notebook 的 kernel 必須指向這個環境
+  - tqdm=4.67.1              # Batch 6 搜尋的進度顯示（缺少時自動退回無進度條）
